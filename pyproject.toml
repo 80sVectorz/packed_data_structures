@@ -1,0 +1,25 @@
+[project]
+name = "packed_data_structures"
+version = "0.1.0"
+description = "A flexible Data oriented swap-and-pop based direct memory access DB system"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy",
+    "numba",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.uv.sources]
+packed-data-structures = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.150.0",
+    "packed-data-structures",
+    "pytest>=9.0.2",
+]

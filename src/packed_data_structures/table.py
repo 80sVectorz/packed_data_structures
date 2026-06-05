@@ -1,0 +1,430 @@
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from collections.abc import Iterable, Sequence
+from collections.abc import Iterator
+
+import numpy as np
+
+
+if TYPE_CHECKING:
+    from packed_data_structures.transaction_context import TransactionContext
+    from packed_data_structures.database import PackedArrayDB
+
+from packed_data_structures.dirty_tracking import (
+    DirtyTimestampProvider,
+    ProvidesDirtyTimestamp,
+)
+
+from packed_data_structures.packed_array import PackedArray
+from packed_data_structures.schemas import (
+    ForeignKeySchema,
+    SupportsGetTableSchema,
+    TableSchema,
+    ColSchemaLike,
+)
+from packed_data_structures.nb_adjacency_list_helpers import (
+    nb_count_adj_elements,
+    nb_get_adj_elements,
+)
+
+type RecordsColMajor = (
+    dict[ColSchemaLike, Sequence[Any]] | Sequence[tuple[ColSchemaLike, Sequence[Any]]]
+)
+type NormalizedRecordsColMajor = tuple[np.ndarray, ...]
+
+type RecordRowMajor = (
+    dict[ColSchemaLike, Any] | dict[str, Any] | Sequence[tuple[ColSchemaLike, Any]]
+    # | NormalizedRecordRowMajor
+)
+type NormalizedRecordRowMajor = tuple[Any, ...]
+
+type UpdatesColMajor = (
+    dict[ColSchemaLike | str, dict[int, Any] | tuple[Sequence[int], Sequence[Any]]]
+    | Sequence[
+        tuple[ColSchemaLike | str, dict[int, Any] | tuple[Sequence[int], Sequence[Any]]]
+    ]
+)
+type NormalizedUpdatesColMajor = tuple[tuple[int, np.ndarray, np.ndarray], ...]
+
+
+@dataclass(slots=True)
+class PackedArrayTable(ProvidesDirtyTimestamp, SupportsGetTableSchema):
+    db: PackedArrayDB
+    table_id: int
+    schema: TableSchema
+
+    column_ids: dict[ColSchemaLike | str, int] = field(init=False, default_factory=dict)
+    arrays: tuple[PackedArray, ...] = field(init=False)
+    foreign_key_columns: tuple[int, ...] = field(init=False)
+
+    name: str = field(init=False)
+
+    _len: int = field(init=False, default=0)
+    _default_record: tuple[Any, ...] = field(init=False)
+
+    _dirty_sources_cache: tuple[DirtyTimestampProvider, ...] | None = field(
+        init=False, default=None
+    )
+
+    def __post_init__(self):
+        self.name = self.schema.name
+        self.column_ids = {
+            **self.schema.col_ids,
+            **{k.name: v for k, v in self.schema.col_ids.items()},
+        }
+        self.arrays = self.schema.init_arrays()
+
+        self.foreign_key_columns = tuple(
+            i
+            for i, col in enumerate(self.schema.cols)
+            if isinstance(col, ForeignKeySchema)
+        )
+        self._default_record = tuple(
+            np.dtype(a.dtype).type(a.empty_fill) for a in self.arrays
+        )
+
+    def __len__(self) -> int:
+        return self._len
+
+    @overload
+    def __getitem__(self, key: str) -> SchemaAccessor[Any, Any]: ...
+
+    @overload
+    def __getitem__(
+        self, key: ForeignKeySchema[Any]
+    ) -> ForeignKeySchemaAccessor[Any]: ...
+
+    @overload
+    def __getitem__[T: np.generic](
+        self, key: ColSchemaLike[T]
+    ) -> SchemaAccessor[T, ColSchemaLike[T]]: ...
+
+    @overload
+    def __getitem__(self, key: int) -> tuple[Any, ...]: ...
+
+    @overload
+    def __getitem__(self, key: slice) -> Sequence[tuple[Any, ...]]: ...
+
+    def __getitem__(self, key: Any) -> Any:
+        if isinstance(key, int):
+            if key < 0:
+                key += len(self)
+            if key < 0 or key >= len(self):
+                raise IndexError(f"Row index out of range: {key}")
+
+            return tuple(arr.view[key] for arr in self.arrays)
+        elif isinstance(key, slice):
+            views = tuple(arr.view[key] for arr in self.arrays)
+            return tuple(zip(*views, strict=True))
+
+        col_id = self.column_ids.get(key)
+        if col_id is None:
+            raise KeyError(
+                f"Table '{self.schema.name}' does not contain column '{key.name}'"
+            )
+
+        if isinstance(key, ForeignKeySchema):
+            return ForeignKeySchemaAccessor(self, key, col_id)
+        else:
+            return SchemaAccessor(self, key, col_id)
+
+    def get_table_schema(self) -> TableSchema:
+        return self.schema
+
+    def normalize_records_row_major(
+        self,
+        *records: dict[ColSchemaLike, Any]
+        | dict[str, Any]
+        | Sequence[tuple[ColSchemaLike, Any]],
+    ) -> Iterator[NormalizedRecordRowMajor]:
+        default_record = list(self._default_record)
+        for r in records:
+            r_norm = default_record.copy()
+            for k, v in r.items() if isinstance(r, dict) else r:
+                if isinstance(k, str):
+                    k = self.schema.cols[self.column_ids[k]]
+
+                col_id = self.column_ids.get(k)
+                if col_id is None:
+                    raise KeyError(
+                        f"Table '{self.schema.name}' does not contain the included column '{k.name}'"
+                    )
+                r_norm[col_id] = v
+
+            yield tuple(r_norm)
+
+    @overload
+    def normalize_records_col_major(
+        self, records: dict[ColSchemaLike, Sequence[Any]]
+    ) -> NormalizedRecordsColMajor: ...
+
+    @overload
+    def normalize_records_col_major(
+        self, records: Sequence[tuple[ColSchemaLike, Sequence[Any]]]
+    ) -> NormalizedRecordsColMajor: ...
+
+    def normalize_records_col_major(
+        self,
+        records: dict[ColSchemaLike, Sequence[Any]]
+        | Sequence[tuple[ColSchemaLike, Sequence[Any]]],
+    ) -> NormalizedRecordsColMajor:
+        last_key = None
+        if isinstance(records, dict):
+            try:
+                records_intermediate = tuple(
+                    (self.column_ids[last_key := k], v) for k, v in records.items()
+                )
+            except KeyError:
+                raise KeyError(
+                    f"Table '{self.schema.name}' does not contain the included column '{last_key}'"
+                ) from None
+        else:
+            try:
+                records_intermediate = tuple(
+                    (self.column_ids[last_key := k], v) for k, v in records
+                )
+            except KeyError:
+                raise KeyError(
+                    f"Table '{self.schema.name}' does not contain the included column '{last_key}'"
+                ) from None
+
+        n_records = max(len(values) for _, values in records_intermediate)
+
+        if any(len(values) != n_records for values in records_intermediate):
+            raise ValueError(
+                "Could not normalize columnar records data. Received misaligned columns."
+            )
+
+        included_keys = set(k for k, _ in records_intermediate)
+        normalized_records: list[None | np.ndarray] = [None] * len(self.arrays)
+
+        for col_id, values in records_intermediate:
+            if isinstance(values, np.ndarray):
+                normalized_records[col_id] = values
+            else:
+                normalized_records[col_id] = np.ndarray(
+                    values, dtype=self.arrays[col_id].dtype
+                )
+
+        for col_id in included_keys.symmetric_difference(self.column_ids.values()):
+            normalized_records[col_id] = np.full(
+                n_records,
+                self.arrays[col_id].empty_fill,
+                dtype=self.arrays[col_id].dtype,
+            )
+
+        return cast(tuple[np.ndarray, ...], tuple(normalized_records))
+
+    def normalize_updates_col_major(
+        self, updates: UpdatesColMajor
+    ) -> NormalizedUpdatesColMajor:
+        """Normalizes various update formats into a standard column-major list of arrays."""
+        if isinstance(updates, dict):
+            iterator = updates.items()
+        else:
+            iterator = updates
+
+        normalized = []
+
+        for key, data in iterator:
+            if isinstance(key, str):
+                col_id = self.column_ids.get(key)
+                if col_id is None:
+                    raise KeyError(f"Column '{key}' not found in table '{self.name}'")
+            else:
+                col_id = self.column_ids.get(key.name)
+                # Verify schema object belongs to this table if strictness is desired
+
+            dtype = self.arrays[col_id].dtype
+
+            if isinstance(data, dict):
+                # {RowIdx: Value} map
+                indices = np.fromiter(data.keys(), dtype=int, count=len(data))
+                values = np.fromiter(data.values(), dtype=dtype, count=len(data))
+            elif isinstance(data, tuple) and len(data) == 2:
+                # (Indices, Values) tuple
+                indices = np.asanyarray(data[0], dtype=int)
+                values = np.asanyarray(data[1], dtype=dtype)
+            else:
+                raise ValueError(f"Invalid update data format for column {key}")
+
+            if len(indices) != len(values):
+                raise ValueError(
+                    f"Update length mismatch for column {key}: {len(indices)} indices vs {len(values)} values"
+                )
+
+            normalized.append((col_id, indices, values))
+
+        return tuple(normalized)
+
+    def _check_transaction_context(self) -> TransactionContext:
+        ctx = self.db._transaction_ctx
+        if ctx is None:
+            raise RuntimeError(
+                "Could not perform edit operation. No active transaction context"
+            )
+        return ctx
+
+    def update_entries(
+        self, updates: UpdatesColMajor, shape: Literal["col_major"] = "col_major"
+    ) -> None:
+        """Updates existing entries.
+
+        Supports dictionary maps `{row_idx: val}` or tuple arrays `(indices, values)`.
+
+        Args:
+            updates: The update data structure.
+            shape: structure of the update data (currently only 'col_major' supported for batching).
+        """
+        ctx = self._check_transaction_context()
+
+        # Currently only implementing col_major path as it's the primary bulk interface
+        if shape == "col_major":
+            normalized = self.normalize_updates_col_major(updates)
+            ctx.register_updates_col_major(self.schema, normalized)
+        else:
+            raise NotImplementedError("row_major updates not yet implemented")
+
+    @overload
+    def add_entries(
+        self,
+        records: Sequence[RecordRowMajor],
+        records_shape: Literal["row_major"],
+    ) -> range: ...
+
+    @overload
+    def add_entries(
+        self,
+        records: RecordsColMajor,
+        records_shape: Literal["col_major"],
+    ) -> range: ...
+
+    def add_entries(
+        self,
+        records: Sequence[RecordRowMajor] | RecordsColMajor,
+        records_shape: Literal["row_major", "col_major"],
+    ) -> range:
+        ctx = self._check_transaction_context()
+
+        if records_shape == "row_major":
+            records = cast(Sequence[RecordRowMajor], records)
+            normalized_records = tuple(self.normalize_records_row_major(*records))
+            return ctx.register_additions_row_major(self.schema, normalized_records)
+        else:
+            records = cast(RecordsColMajor, records)
+            normalized_records = self.normalize_records_col_major(records)
+            return ctx.register_additions_col_major(self.schema, normalized_records)
+
+    def add_entry(
+        self,
+        entry_record: RecordRowMajor,
+    ) -> range:
+        return self.add_entries((entry_record,), "row_major")
+
+    def del_entries(
+        self, indices: Iterable[int] | np.ndarray[Any, np.dtype[np.bool_]]
+    ) -> None:
+        """Delete rows.
+
+        If any foreign keys are severed as a result of the deletion.
+        Those rows are also deleted.
+
+        Args:
+            indices: The indices of the rows to delete
+
+        Raises:
+            IndexError: If any index doesn't satisfy:
+                -1 < i < table_size
+        """
+        ctx = self._check_transaction_context()
+
+        # Handle boolean mask
+        if isinstance(indices, np.ndarray) and indices.dtype == bool:
+            # Fast conversion to indices
+            indices = np.nonzero(indices)[0]
+        else:
+            indices = tuple(indices)
+
+        max_index = len(self) - 1
+        for index in indices:
+            if index < 0 or index > max_index:
+                raise IndexError(
+                    f"Could not perform delete operation. Encountered invalid index: {index}"
+                )
+
+        ctx.register_deletions(self.schema, indices)
+
+    def del_entry(self, index: int):
+        """Delete row.
+
+        Args:
+            index: The index of the row to delete
+
+        Raises:
+            IndexError: If the index doesn't satisfy:
+                -1 < i < table_size
+        """
+        self.del_entries((index,))
+
+    # --- dirty tracking ---
+    def _collect_dirty_sources(self) -> tuple[DirtyTimestampProvider, ...]:
+        return self.arrays
+
+
+@dataclass(slots=True)
+class SchemaAccessor[T: np.generic, S: ColSchemaLike]:
+    table: PackedArrayTable
+    schema: S
+    col_id: int
+
+    @property
+    def view(self) -> np.ndarray[Any, np.dtype[T]]:
+        return cast(
+            np.ndarray[Any, np.dtype[T]],
+            self.table.arrays[self.col_id].view,
+        )
+
+    def __getitem__(self, *args):
+        return self.view.__getitem__(*args)
+
+    @property
+    def arr(self) -> PackedArray[T]:
+        return self.table.arrays[self.col_id]
+
+
+@dataclass(slots=True)
+class ForeignKeySchemaAccessor[T: np.generic](SchemaAccessor[T, ForeignKeySchema[T]]):
+    table: PackedArrayTable
+    schema: ForeignKeySchema[T]
+    col_id: int
+
+    target_table: PackedArrayTable = field(init=False)
+
+    def __post_init__(self):
+        self.target_table = self.table.db.get_table(self.schema.target_table)
+
+    def get_referencing_indices(
+        self, head_indices: Iterable[int]
+    ) -> tuple[tuple[int, ...], ...]:
+        head_indices = tuple(head_indices)
+
+        vw_adj_head = self.target_table[self.schema.adj_head].view
+        vw_adj_next = self.table[self.schema.adj_next].view
+
+        index_spec = self.table.schema.index_spec
+        if not self.schema.adjacency_conf.track_counts:
+            counts = np.zeros_like(head_indices, index_spec.dtype)
+            nb_count_adj_elements(
+                head_indices, vw_adj_head, vw_adj_next, index_spec.missing, out=counts
+            )
+
+        else:
+            vw_adj_count = self.target_table[self.schema.adj_count].view
+            counts = vw_adj_count[list(head_indices)]
+
+        indices = tuple(np.zeros(cnt, index_spec.dtype) for cnt in counts)
+
+        nb_get_adj_elements(head_indices, counts, vw_adj_head, vw_adj_next, out=indices)
+
+        return tuple(tuple(v.astype(int)) for v in indices)  # type: ignore
