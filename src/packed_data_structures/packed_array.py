@@ -26,7 +26,7 @@ class PackedArray[T: np.generic](
     __array_priority__ = 1000
 
     _data: PackedArrayBuffer[T]
-    _cached_vsize: int = -1
+    _cached_size: int = -1
     _cached_view: DirtyTrackingArray[Any, T] | None = None
 
     def __init__(
@@ -50,13 +50,13 @@ class PackedArray[T: np.generic](
             resize_factor (int | float, optional): The multiplier used when
                 resizing the array. Defaults to 2.
             element_shape (tuple[int, ...] | None, optional): The shape of
-                individual elements. Must be None if `true_size` is provided
+                individual elements. Must be None if `capacity` is provided
                 as a tuple. Defaults to None.
 
         Raises:
             ValueError: If `element_shape` is provided both as an argument and
-                embedded within the `true_size` tuple.
-            ValueError: If `true_size` is a tuple with no dimensions.
+                embedded within the `capacity` tuple.
+            ValueError: If `capacity` is a tuple with no dimensions.
             ValueError: If the resulting size is negative.
         """
         if isinstance(pre_allocated_capacity, tuple):
@@ -86,11 +86,11 @@ class PackedArray[T: np.generic](
 
     @property
     def view(self) -> DirtyTrackingArray[Any, T]:
-        if self._cached_view is None or self._cached_vsize != self._data.virtual_size:
-            vsize = self._data.virtual_size
-            new_view = self._data.arr[:vsize]
+        if self._cached_view is None or self._cached_size != self._data.size:
+            size = self._data.size
+            new_view = self._data.arr[:size]
             self._cached_view = cast(DirtyTrackingArray[Any, T], new_view)
-            self._cached_vsize = vsize
+            self._cached_size = size
         return self._cached_view
 
     @property
@@ -101,10 +101,10 @@ class PackedArray[T: np.generic](
     def _invalidate(self):
         """Mark the current view as stale."""
         self._cached_view = None
-        self._cached_vsize = -1
+        self._cached_size = -1
 
     def __len__(self) -> int:
-        return self._data.virtual_size
+        return self._data.size
 
     def __iter__(self):
         return iter(self.view)
@@ -169,69 +169,69 @@ class PackedArray[T: np.generic](
         return func(*args, **kwargs)
 
     def append(self, element: T) -> None:
-        t_size = self._data.true_size
-        v_size = self._data.virtual_size
-        if v_size >= t_size:
+        capacity = self._data.capacity
+        size = self._data.size
+        if size >= capacity:
             if self.resize_factor != 0:
                 new_t_size = max(
-                    round(t_size * self.resize_factor),
-                    t_size + 1,
-                    v_size + 1,
+                    round(capacity * self.resize_factor),
+                    capacity + 1,
+                    size + 1,
                 )
                 self._data.resize(new_t_size)
-                self._data.arr[v_size:] = self.empty_fill
+                self._data.arr[size:] = self.empty_fill
             else:
                 raise Exception("Append failed: max capacity reached")
-        self._data.virtual_size += 1
-        self._data.arr[v_size] = element
+        self._data.size += 1
+        self._data.arr[size] = element
         self._invalidate()
 
-    def ensure_size(self, size: int, virtual_shrink: bool = False):
-        t_size = self._data.true_size
-        v_size = self._data.virtual_size
+    def ensure_size(self, size: int, shrink_size: bool = False):
+        capacity = self._data.capacity
+        current_size = self._data.size
 
-        if size < v_size:
-            if virtual_shrink:
-                self._data.virtual_size = size
+        if size < current_size:
+            if shrink_size:
+                self._data.size = size
                 self._invalidate()
             return
 
-        if size > t_size:
+        if size > capacity:
             if self.resize_factor != 0:
-                new_t_size = t_size
-                while new_t_size < size:
-                    next_size = round(new_t_size * self.resize_factor)
-                    if next_size <= new_t_size:
-                        next_size = new_t_size + 1
-                    new_t_size = next_size
-                self._data.resize(new_t_size)
+                new_capacity = capacity
+                while new_capacity < size:
+                    next_size = round(new_capacity * self.resize_factor)
+                    if next_size <= new_capacity:
+                        next_size = new_capacity + 1
+                    new_capacity = next_size
+                self._data.resize(new_capacity)
                 self._data.arr[size:] = self.empty_fill
             else:
                 raise Exception("Pad to size failed: max capacity reached")
 
-        self._data.arr[v_size:size] = self.empty_fill
-        self._data.virtual_size = size
+        self._data.arr[current_size:size] = self.empty_fill
+        self._data.size = size
         self._invalidate()
 
     def remove(self, index: int) -> T:
-        v_size = self._data.virtual_size
-        if index >= v_size:
+        size = self._data.size
+        if index >= size:
             raise IndexError(
-                f"Remove failed. index out of range: {index} > {v_size - 1}"
+                f"Remove failed. index out of range: {index} > {size - 1}"
             )
-        if index < -v_size:
-            raise IndexError(f"Remove failed. index out of range: {index} < {-v_size}")
+        if index < -size:
+            raise IndexError(f"Remove failed. index out of range: {index} < {-size}")
 
         if index < 0:
-            index += v_size
+            index += size
 
         val = self._data.arr[index]
         self._data.arr[index] = self.empty_fill
 
-        if index != v_size - 1:
-            self._swap(v_size - 1, index)
+        if index != size - 1:
+            self._swap(size - 1, index)
 
-        self._data.virtual_size -= 1
+        self._data.size -= 1
         self._invalidate()
 
         return val
@@ -241,16 +241,16 @@ class PackedArray[T: np.generic](
         arr[idx_a], arr[idx_b] = arr[idx_b], arr[idx_a]
 
     def swap(self, idx_a: int, idx_b: int):
-        v_size = self._data.virtual_size
-        if (c_idx := max(idx_a, idx_b)) >= v_size:
-            raise IndexError(f"Swap failed. index out of range: {c_idx} > {v_size - 1}")
-        if (c_idx := min(idx_a, idx_b)) < -v_size:
-            raise IndexError(f"Swap failed. index out of range: {c_idx} < {-v_size}")
+        size = self._data.size
+        if (c_idx := max(idx_a, idx_b)) >= size:
+            raise IndexError(f"Swap failed. index out of range: {c_idx} > {size - 1}")
+        if (c_idx := min(idx_a, idx_b)) < -size:
+            raise IndexError(f"Swap failed. index out of range: {c_idx} < {-size}")
 
         if idx_a < 0:
-            idx_a += v_size
+            idx_a += size
         if idx_b < 0:
-            idx_b += v_size
+            idx_b += size
 
         self._swap(idx_a, idx_b)
 
@@ -276,7 +276,7 @@ class PackedArray[T: np.generic](
         """
         current_size = len(self)
         n_additions = len(additions) if additions is not None else 0
-        new_size, addition_dests, relocations = plan_bulk_edit(
+        new_size, addition_dests, relocations, _ = plan_bulk_edit(
             current_size, n_additions, removals or []
         )
 
@@ -285,7 +285,7 @@ class PackedArray[T: np.generic](
         if relocations[0]:
             vw[relocations[1]] = vw[relocations[0]]
 
-        self._data.virtual_size = new_size
+        self._data.size = new_size
         vw = self.view
 
         if n_additions:
@@ -331,36 +331,35 @@ class PackedArray[T: np.generic](
 
 @dataclass(slots=True)
 class PackedArrayBuffer[T: np.generic]:
-    """Implements amortized resizable array logic.
+    """A container for the underlying numpy array memory.
 
-    Tracks both the true allocated capacity and the virtual size (the number
-    of active elements). Handles the underlying memory allocation and geometric
-    resizing of the numpy array.
+    Tracks both the allocated capacity and the current size. Handles the
+    direct reallocation of the underlying numpy array memory to a specific size.
 
     Attributes:
-        true_size: The allocated capacity of the underlying array.
+        capacity: The allocated capacity of the underlying array.
         dtype: The numpy data type of the elements.
         element_shape: The shape of individual elements.
     """
-    true_size: int
+    capacity: int
     dtype: DTypeLike
     element_shape: tuple[int, ...] = field(default_factory=tuple)
 
-    virtual_size: int = field(init=False)
+    size: int = field(init=False)
     arr: DirtyTrackingArray[Any, T] = field(init=False)
 
     def __post_init__(self) -> None:
-        self.virtual_size = 0
-        raw_arr = np.empty((self.true_size, *self.element_shape), dtype=self.dtype)
+        self.size = 0
+        raw_arr = np.empty((self.capacity, *self.element_shape), dtype=self.dtype)
         self.arr = DirtyTrackingArray(raw_arr)
 
     def resize(self, new_true_size: int, allow_shrink: bool = False):
-        virtual_size = self.virtual_size
+        size = self.size
 
-        if not allow_shrink and new_true_size < virtual_size:
+        if not allow_shrink and new_true_size < size:
             raise ValueError(
-                f"""Resize failed. Requested size smaller than current virtual size:
-                {new_true_size} < {virtual_size}"""
+                f"""Resize failed. Requested size smaller than current size:
+                {new_true_size} < {size}"""
             )
 
         old_arr = self.arr
@@ -368,12 +367,12 @@ class PackedArrayBuffer[T: np.generic]:
         new_arr = np.empty((new_true_size, *self.element_shape), dtype=old_arr.dtype)
 
         # preserve existing content
-        if virtual_size:
-            new_arr[:virtual_size] = old_arr[:virtual_size]
+        if size:
+            new_arr[:size] = old_arr[:size]
 
         # fill the rest with something safe; caller sets values later
-        if new_true_size > virtual_size:
-            new_arr[virtual_size:] = 0
+        if new_true_size > size:
+            new_arr[size:] = 0
 
         self.arr = DirtyTrackingArray(new_arr, old_arr.timestamp_ref)
-        self.true_size = new_true_size
+        self.capacity = new_true_size

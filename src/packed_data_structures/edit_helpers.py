@@ -17,7 +17,7 @@ def plan_bulk_edit(
     Meaning that new values replace removal targets to avoid unnecessary swaps.
 
     Args:
-        current_size: Current virtual size of the array.
+        current_size: Current size of the array.
         n_additions: Number of editions.
         removals: List of indices to remove.
 
@@ -327,7 +327,7 @@ def fix_keys_broken_by_moved_targets(
 @nb.njit(cache=True)
 def interleave_new_rows(
     n_new: int,
-    virt_start: int,
+    staged_start: int,
     missing_val_src: int,
     missing_val_tgt: int,
     targets: np.ndarray,
@@ -361,7 +361,7 @@ def interleave_new_rows(
 
     Args:
         n_new: Number of new additions.
-        virt_start: First virtual ID.
+        staged_start: First staged ID.
         missing_val_src: Sentinel missing value of source/parent column (dtype max).
         missing_val_tgt: Sentinel missing value of target/child column (dtype max).
         targets: Target indices (FK targets) for each new row.
@@ -414,15 +414,15 @@ def interleave_new_rows(
 
         # head[target] = first_new
         out_head_idx[h_cursor] = t
-        out_head_val[h_cursor] = virt_start + first_idx
+        out_head_val[h_cursor] = staged_start + first_idx
         h_cursor += 1
 
         # Link the new chain internally.
         for k in range(start, end - 1):
             a = order[k]
             b = order[k + 1]
-            new_nexts[a] = virt_start + b
-            new_prevs[b] = virt_start + a
+            new_nexts[a] = staged_start + b
+            new_prevs[b] = staged_start + a
 
         # Tail points to old head.
         new_nexts[last_idx] = old_head
@@ -430,7 +430,7 @@ def interleave_new_rows(
         # old_head.prev = last_new
         if old_head != missing_val_src:
             out_prev_idx[p_cursor] = old_head
-            out_prev_val[p_cursor] = virt_start + last_idx
+            out_prev_val[p_cursor] = staged_start + last_idx
             p_cursor += 1
 
     return new_nexts, new_prevs, p_cursor, h_cursor

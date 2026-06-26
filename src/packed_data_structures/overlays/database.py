@@ -107,14 +107,14 @@ class _OverlaidTransactionContext(TransactionContext):
                     continue
 
                 table = self.db.get_table(tbl_name)
-                # Calculate the start of the virtual ID range for the current buffer
+                # Calculate the start of the staged ID range for the current buffer
                 buf_len = len(self.additions[tbl_name][0])
-                virt_start = self._virtual_counters[tbl_name] - buf_len
+                staged_start = self._staged_counters[tbl_name] - buf_len
 
                 for row_id, col_map in rows.items():
-                    # We only patch Virtual IDs (new rows) here
-                    if row_id >= virt_start:
-                        offset = row_id - virt_start
+                    # We only patch Staged IDs (new rows) here
+                    if row_id >= staged_start:
+                        offset = row_id - staged_start
                         for col_name, val in col_map.items():
                             col_idx = table.column_ids[col_name]
                             self.additions[tbl_name][col_idx][offset] = val

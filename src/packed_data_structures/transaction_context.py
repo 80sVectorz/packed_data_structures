@@ -234,8 +234,8 @@ class RemapOracle(NamedTuple):
         moves_from: Sorted array of original row indices that were relocated.
         moves_to: The new physical indices corresponding to `moves_from`.
         moves_to_sorted: A sorted version of `moves_to` for fast collision checks.
-        addition_destinations: Array of indices where new virtual rows were placed.
-        virtual_indices_start: The index where virtual (newly added) rows begin.
+        addition_destinations: Array of indices where new staged rows were placed.
+        staged_indices_start: The index where staged (newly added) rows begin.
         new_size: The total physical size of the table after the edit.
         missing_index_sentinel: The integer sentinel representing a missing link.
     """
@@ -245,7 +245,7 @@ class RemapOracle(NamedTuple):
     moves_to: np.ndarray
     moves_to_sorted: np.ndarray
     addition_destinations: np.ndarray
-    virtual_indices_start: int
+    staged_indices_start: int
     new_size: int
     missing_index_sentinel: int
 
@@ -255,9 +255,9 @@ def oracle_resolve(idx, oracle: RemapOracle) -> int:
     o = oracle
     missing_idx = o.missing_index_sentinel
 
-    # Virtual IDs (New Additions)
-    if idx >= o.virtual_indices_start:
-        offset = idx - o.virtual_indices_start
+    # Staged IDs (New Additions)
+    if idx >= o.staged_indices_start:
+        offset = idx - o.staged_indices_start
         if offset < len(o.addition_destinations):
             return int(o.addition_destinations[offset])
         return missing_idx
@@ -310,7 +310,7 @@ def oracle_resolve_array(
     """Translate a list of indices through a RemapOracle.
 
     This resolves:
-      - virtual indices
+      - staged indices
       - moved indices
       - overwritten indices
       - deletions
@@ -412,16 +412,16 @@ class TransactionContext:
     )
     """Stores FK topology changes: `TableName -> [ ColName -> [ RowIdx -> NewTargetID ] ]`"""
 
-    _virtual_counters: dict[str, int] = field(init=False)
-    _virtual_starts: dict[str, int] = field(init=False)
+    _staged_counters: dict[str, int] = field(init=False)
+    _staged_starts: dict[str, int] = field(init=False)
 
     _deletion_traceback: DeletionTraceback = field(
         init=False, default_factory=DeletionTraceback
     )
 
     def __post_init__(self):
-        self._virtual_starts = {t.schema.name: len(t) for t in self.db.tables}
-        self._virtual_counters = self._virtual_starts.copy()
+        self._staged_starts = {t.schema.name: len(t) for t in self.db.tables}
+        self._staged_counters = self._staged_starts.copy()
 
     def __enter__(self) -> None:
         pass
@@ -439,17 +439,17 @@ class TransactionContext:
         """Registers bulk updates."""
         tbl_name = table.name
         deleted_set = self.deletions[tbl_name]
-        virtual_start = self._virtual_starts[tbl_name]
+        staged_start = self._staged_starts[tbl_name]
 
         # Pre-validate all updates before applying partial changes
         for col_idx, indices, _ in updates:
             col_obj = table.cols[col_idx]
             col_name = col_obj.name
 
-            # Check for overlap with new additions (Virtual IDs)
-            if np.max(indices) >= virtual_start:
-                raise UpdateVirtualRowException(
-                    message=f"Virtual row(s) in update indices for '{tbl_name}'.'{col_name}':\n{indices[indices >= virtual_start]}"
+            # Check for overlap with new additions (Staged IDs)
+            if np.max(indices) >= staged_start:
+                raise UpdateStagedRowException(
+                    message=f"Staged row(s) in update indices for '{tbl_name}'.'{col_name}':\n{indices[indices >= staged_start]}"
                 )
 
             # Check for overlap with deletions
@@ -467,7 +467,7 @@ class TransactionContext:
             # Check for overlap with queued updates (Physical IDs)
             pending_col_updates = self.updates[tbl_name].get(col_name, {})
             for idx in indices:
-                if idx < virtual_start and idx in pending_col_updates:
+                if idx < staged_start and idx in pending_col_updates:
                     raise UpdateQueuedEditException(
                         message=f"Row {idx} in '{tbl_name}'.'{col_name}' already has a staged update.",
                         problematic_index=idx,
@@ -503,14 +503,13 @@ class TransactionContext:
             additions = tuple([] for _ in range(len(table.cols)))
             self.additions[table.name] = additions
 
-        deleted_set = self.deletions[table.name]
-
         for i, col in enumerate(table.cols):
             if isinstance(col, ForeignKeySchema):
                 if col.target_table.name in self.deletions:
                     targets = values[i]
+                    target_deletions = self.deletions[col.target_table.name]
 
-                    if not deleted_set.isdisjoint(targets):
+                    if not target_deletions.isdisjoint(targets):
                         raise VoidReferenceException(
                             message=f"Received keys for '{col.name}' that target deleted rows"
                         )
@@ -520,14 +519,14 @@ class TransactionContext:
             if isinstance(col, ForeignKeySchema):
                 self.new_fk_claims[col.target_table.name].update(values[i])
 
-        current_counter = self._virtual_counters[table.name]
+        current_counter = self._staged_counters[table.name]
         n_additions = len(values[0]) if values else 0
         new_counter = current_counter + n_additions
-        new_virtual_ids = range(current_counter, new_counter)
+        new_staged_ids = range(current_counter, new_counter)
 
-        self._virtual_counters[table.name] = new_counter
+        self._staged_counters[table.name] = new_counter
 
-        return new_virtual_ids
+        return new_staged_ids
 
     def register_additions_row_major(
         self, table: TableSchema, values: tuple[NormalizedRecordRowMajor, ...]
@@ -710,7 +709,7 @@ class TransactionContext:
             moves_to=arr_moves_to,
             moves_to_sorted=arr_moves_to_sorted,
             addition_destinations=arr_addition_dests,
-            virtual_indices_start=self._virtual_starts[table],
+            staged_indices_start=self._staged_starts[table],
             new_size=new_size,
             missing_index_sentinel=idx_spec.missing,
         )
@@ -752,7 +751,7 @@ class TransactionContext:
             moves_to=np.empty(0),
             moves_to_sorted=np.empty(0),
             addition_destinations=np.empty(0),
-            virtual_indices_start=len(table_obj),
+            staged_indices_start=len(table_obj),
             new_size=len(table_obj),
             missing_index_sentinel=table_obj.schema.index_spec.missing,
         )
@@ -999,7 +998,7 @@ class TransactionContext:
                     scratch_pad.head_cursor,
                 ) = interleave_new_rows(
                     n_new=n_additions,
-                    virt_start=source_oracle.virtual_indices_start,
+                    staged_start=source_oracle.staged_indices_start,
                     missing_val_src=missing_idx_src,
                     missing_val_tgt=missing_idx_tgt,
                     targets=targets,
@@ -1069,7 +1068,7 @@ class TransactionContext:
 
                 if additions:
                     if o.new_size > len(data):
-                        src_tbl.arrays[i].ensure_size(o.new_size, virtual_shrink=True)
+                        src_tbl.arrays[i].ensure_size(o.new_size, shrink_size=True)
                         data = col_obj.view
                     data[o.addition_destinations] = additions[i][0]
 
@@ -1102,7 +1101,7 @@ class TransactionContext:
                         data[dest_rows[valid]] = vals[valid]
 
                 if o.new_size < len(data):
-                    src_tbl.arrays[i].ensure_size(o.new_size, virtual_shrink=True)
+                    src_tbl.arrays[i].ensure_size(o.new_size, shrink_size=True)
 
         # Apply patches
         for tbl_name, patches in tbl_patches.items():
@@ -1173,8 +1172,8 @@ class UpdateQueuedEditException(TransactionContextException):
 
 
 @dataclass(kw_only=True)
-class UpdateVirtualRowException(TransactionContextException):
-    """Raised when an update targets a virtual row."""
+class UpdateStagedRowException(TransactionContextException):
+    """Raised when an update targets a staged row."""
 
     ...
 
