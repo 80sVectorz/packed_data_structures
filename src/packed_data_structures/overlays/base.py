@@ -50,4 +50,3 @@ class DbFeature:
     # Note: Specific implementations (like GraphFeature) usually subclass this
     # to enforce type safety on the 'layer' argument.
     pass
-

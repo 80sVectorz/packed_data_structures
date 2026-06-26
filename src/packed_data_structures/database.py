@@ -28,6 +28,7 @@ class PackedArrayDB(ProvidesDirtyTimestamp):
         table_schemas: A tuple of all registered TableSchemas.
         tables: A tuple of the instantiated PackedArrayTables.
     """
+
     table_ids: dict[str, int] = field(init=False)
     table_schemas: tuple[TableSchema, ...] = field(init=False)
     tables: tuple[PackedArrayTable, ...] = field(init=False)

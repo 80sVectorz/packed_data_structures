@@ -371,12 +371,12 @@ class DatabaseIntegrityMachine(RuleBasedStateMachine):
     @invariant()
     def check_consistency(self):
         # 1. Check Counts
-        assert (
-            len(self.t_targets) == len(self.model_targets)
-        ), f"Target count mismatch. DB: {len(self.t_targets)}, Model: {len(self.model_targets)}"
-        assert (
-            len(self.t_sources) == len(self.model_sources)
-        ), f"Source count mismatch. DB: {len(self.t_sources)}, Model: {len(self.model_sources)}"
+        assert len(self.t_targets) == len(self.model_targets), (
+            f"Target count mismatch. DB: {len(self.t_targets)}, Model: {len(self.model_targets)}"
+        )
+        assert len(self.t_sources) == len(self.model_sources), (
+            f"Source count mismatch. DB: {len(self.t_sources)}, Model: {len(self.model_sources)}"
+        )
 
         # 2. Verify Targets Data
         db_t_uids = self.t_targets[self.t_uid_col].view
@@ -387,9 +387,9 @@ class DatabaseIntegrityMachine(RuleBasedStateMachine):
             payload = db_t_payloads[i]
 
             assert uid in self.model_targets, f"Found unexpected Target UID {uid} in DB"
-            assert (
-                self.model_targets[uid].payload == payload
-            ), f"Payload mismatch for Target {uid}"
+            assert self.model_targets[uid].payload == payload, (
+                f"Payload mismatch for Target {uid}"
+            )
 
         # 3. Verify Sources Data & Foreign Keys
         db_s_uids = self.t_sources[self.s_uid_col].view
@@ -404,14 +404,14 @@ class DatabaseIntegrityMachine(RuleBasedStateMachine):
             s_payload = db_s_payloads[i]
             s_fk_idx = db_s_fks[i]
 
-            assert (
-                s_uid in self.model_sources
-            ), f"Found unexpected Source UID {s_uid} in DB"
+            assert s_uid in self.model_sources, (
+                f"Found unexpected Source UID {s_uid} in DB"
+            )
             model_rec = self.model_sources[s_uid]
 
-            assert (
-                model_rec.payload == s_payload
-            ), f"Payload mismatch for Source {s_uid}"
+            assert model_rec.payload == s_payload, (
+                f"Payload mismatch for Source {s_uid}"
+            )
 
             # Check for dangling pointer
             if s_fk_idx == self.t_schema.index_spec.missing:
@@ -426,9 +426,9 @@ class DatabaseIntegrityMachine(RuleBasedStateMachine):
             actual_target_uid = target_uid_lookup[s_fk_idx]
             expected_target_uid = model_rec.target_uid
 
-            assert (
-                actual_target_uid == expected_target_uid
-            ), f"FK Mismatch for Source {s_uid}. Points to Target {actual_target_uid}, expected {expected_target_uid}"
+            assert actual_target_uid == expected_target_uid, (
+                f"FK Mismatch for Source {s_uid}. Points to Target {actual_target_uid}, expected {expected_target_uid}"
+            )
 
 
 DatabaseIntegrityMachine.TestCase.settings = settings(

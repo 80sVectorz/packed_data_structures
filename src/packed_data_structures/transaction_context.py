@@ -239,6 +239,7 @@ class RemapOracle(NamedTuple):
         new_size: The total physical size of the table after the edit.
         missing_index_sentinel: The integer sentinel representing a missing link.
     """
+
     set_null_unlinks_sorted: np.ndarray
     deletions_sorted: np.ndarray
     moves_from: np.ndarray

@@ -160,7 +160,7 @@ class DatabaseVisualizer:
             for i, cell in enumerate(row):
                 widths[i] = max(widths[i], len(str(cell)))
 
-        title_sep = f"{table_name:─^{sum(widths)+2*(len(widths)-1)}}"
+        title_sep = f"{table_name:─^{sum(widths) + 2 * (len(widths) - 1)}}"
         rows_fmt = "  ".join(f"{{:<{w}}}" for w in widths)
         sep = "─" * len(title_sep)
         result = [title_sep, rows_fmt.format(*col_labels), sep]
