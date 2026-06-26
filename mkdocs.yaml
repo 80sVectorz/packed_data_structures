@@ -37,9 +37,16 @@ markdown_extensions:
   - pymdownx.inlinehilite
   - pymdownx.snippets
   - pymdownx.superfences
+  - pymdownx.arithmatex:
+      generic: true
 
 extra_css:
   - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
 nav:
   - Home: index.md
@@ -50,4 +57,9 @@ nav:
       - The Overlays Pattern: guide/overlays.md
       - "Bonus: Dirty Tracking": guide/dirty_tracking.md
   - API Reference:
-      - Core System: reference/core.md
+      - Schemas: reference/schemas.md
+      - Database: reference/database.md
+      - Table: reference/table.md
+      - Transaction Context: reference/transaction_context.md
+      - Packed Array: reference/packed_array.md
+      - Dirty Tracking: reference/dirty_tracking.md

@@ -1,6 +1,6 @@
 # The Schemas System
 
-The `packed_data_structures` package uses a programmatic schema system to define the shape and relationships of your data. Instead of relying on string-based keys or dynamic dictionaries, you construct singletons that represent your tables and columns. These objects act as typed identifiers that enforce strict data types, manage memory allocation, and provide native IDE autocomplete support.
+The `packed_data_structures` package uses a programmatic schema system to define the shape and relationships of your data. Instead of relying on string-based keys or dynamic dictionaries, you construct singletons that represent your tables and columns. These objects act as typed identifiers that can be tracked by static code analysis tools, improving the safety and maintainability of your code.
 
 ## TableSchema
 
@@ -23,7 +23,7 @@ By defining an `IndexSpec`, the schema establishes a universal language for how 
 
 Data columns define the actual properties stored within a table. A `DataColSchema` encapsulates the name, NumPy data type, default values, and shape (for vector data) of a property.
 
-To build our table, we register columns directly to the table schema:
+To build our table, we can provide the columns directly to the table schema during initialization, or register them manually later:
 
 ```python
 from packed_data_structures.schemas import DataColSchema
@@ -34,9 +34,16 @@ col_weight = DataColSchema(name="weight", dtype=np.float32, default=1.0)
 # A vector float32 column (e.g., a 3D vector)
 col_position = DataColSchema(name="position", dtype=np.float32, shape=(3,), default=0.0)
 
-# Register the columns to the table
-table_a_schema.register(col_weight)
-table_a_schema.register(col_position)
+# 1. Clean Initialization (Recommended)
+table_a_schema = TableSchema(
+    name="table_a", 
+    index_spec=IndexSpec.from_dtype(np.uint32),
+    cols=[col_weight, col_position]
+)
+
+# 2. Manual Registration
+# table_a_schema.register(col_weight)
+# table_a_schema.register(col_position)
 ```
 
 ### Type Hinting and Autocomplete
@@ -69,9 +76,40 @@ table_b_schema.register(fk_to_a)
 A key feature of the `ForeignKeySchema` is that it is not just a passive reference. When a foreign key is registered, it actively alters both the source and target table schemas by automatically injecting synthetic columns to manage an internal doubly-linked adjacency list.
 
 For the `fk_to_a` schema above, the system silently injects:
-1. `adj_head`: A column in `table_a` pointing to the first connected row in `table_b`.
-2. `adj_next`: A column in `table_b` pointing to the next connected row in `table_b` that shares the same target in `table_a`.
-3. `adj_prev`: A column in `table_b` pointing to the previous connected row.
-4. `adj_count`: A column in `table_a` (enabled via `AdjacencyListConf`) that tracks the number of incoming links.
 
-Because these topology pointers are managed by the schema and updated via the `TransactionContext`, querying the "children" of a row in `table_a` is an O(1) memory traversal operation rather than a costly search or index lookup.
+- `adj_head`: A column in `table_a` pointing to the first connected row in `table_b`.
+
+- `adj_next`: A column in `table_b` pointing to the next connected row in `table_b` that shares the same target in `table_a`.
+
+- `adj_prev`: A column in `table_b` pointing to the previous connected row.
+
+- `adj_count`: A column in `table_a` (enabled via `AdjacencyListConf`) that tracks the number of incoming links.
+
+
+These topology pointers are essential for efficiently maintaining relational integrity when editing the database, particularly when resolving foreign keys during swap-and-pop deletions.
+
+## The Database
+
+It is important to remember that all of the schema classes discussed so far are simply **blueprints**. They define the structure, data types, and relationships of your data, but they do not allocate any arrays or store any data themselves.
+
+To bring your schemas to life, you must initialize them within a `PackedArrayDB` (or an overlay).
+
+You can provide the schemas directly when creating the database for clean initialization, or manually register them later:
+
+```python
+from packed_data_structures.database import PackedArrayDB
+
+# 1. Clean Initialization (Recommended)
+# The database allocates the memory immediately based on the provided schemas
+db = PackedArrayDB(table_a_schema, table_b_schema)
+
+# 2. Manual Initialization
+# db = PackedArrayDB()
+# db.init_table(table_a_schema)
+# db.init_table(table_b_schema)
+
+# Retrieve the live table instance to interact with the data
+table_a = db.get_table(table_a_schema)
+```
+
+The database acts as the central registry, holding all the physical `PackedArrayTable` instances and providing the `TransactionContext` needed to safely modify them.

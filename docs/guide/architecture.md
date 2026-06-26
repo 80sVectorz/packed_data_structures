@@ -6,7 +6,7 @@ To fully utilize the `packed_data_structures` package, it helps to understand ho
 
 Instead of the traditional Object-Oriented approach where a "row" is represented as a single object containing multiple fields (Array of Structures), this package uses a **Structure of Arrays (SoA)** memory layout. 
 
-In the SoA model, a table is simply a logical grouping of independent columns. Each column is backed by a single, contiguous 1-dimensional NumPy array. When you define a table with `Weight` and `Position` columns, you are creating one flat array of weights and another flat array of positions. A "row" is an abstract concept that merely represents sharing the same index across these independent arrays.
+In the SoA model, a table is simply a logical grouping of independent columns. Each column is backed by a single, contiguous NumPy array. When you define a table with `Weight` and `Position` columns, you are creating a flat array of weights and a one 2D array of positions. A "row" is an abstract concept that merely represents sharing the same index across these independent arrays.
 
 ### Cache Locality
 
