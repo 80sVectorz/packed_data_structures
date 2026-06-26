@@ -19,6 +19,7 @@ plugins:
       default_handler: python
       handlers:
         python:
+          paths: [src]
           options:
             docstring_style: google
             show_root_heading: true
@@ -42,5 +43,11 @@ extra_css:
 
 nav:
   - Home: index.md
+  - Guide:
+      - The Schemas System: guide/schemas.md
+      - Public API & CRUD: guide/crud.md
+      - Technical Architecture: guide/architecture.md
+      - The Overlays Pattern: guide/overlays.md
+      - "Bonus: Dirty Tracking": guide/dirty_tracking.md
   - API Reference:
       - Core System: reference/core.md
