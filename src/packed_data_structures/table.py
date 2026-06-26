@@ -50,6 +50,21 @@ type NormalizedUpdatesColMajor = tuple[tuple[int, np.ndarray, np.ndarray], ...]
 
 @dataclass(slots=True)
 class PackedArrayTable(ProvidesDirtyTimestamp, SupportsGetTableSchema):
+    """A tabular data structure backed by columnar PackedArrays.
+
+    This is the primary user-facing class for interacting with the database.
+    It provides a schema-driven API, where users interact with rows and columns
+    using the singleton schema objects (e.g., `DataColSchema`) instead of string keys.
+
+    Attributes:
+        db: The parent database instance containing this table.
+        table_id: The internal ID of this table within the database.
+        schema: The TableSchema defining the columns and index spec.
+        column_ids: A mapping from schema objects (or string names) to array indices.
+        arrays: A tuple of the underlying PackedArray buffers.
+        foreign_key_columns: Indices of columns that represent foreign keys.
+        name: The string identifier of the table.
+    """
     db: PackedArrayDB
     table_id: int
     schema: TableSchema
@@ -130,6 +145,11 @@ class PackedArrayTable(ProvidesDirtyTimestamp, SupportsGetTableSchema):
             return SchemaAccessor(self, key, col_id)
 
     def get_table_schema(self) -> TableSchema:
+        """Get the schema definition of this table.
+
+        Returns:
+            The underlying TableSchema.
+        """
         return self.schema
 
     def normalize_records_row_major(
@@ -374,12 +394,31 @@ class PackedArrayTable(ProvidesDirtyTimestamp, SupportsGetTableSchema):
 
 @dataclass(slots=True)
 class SchemaAccessor[T: np.generic, S: ColSchemaLike]:
+    """Provides a typed view into a specific column of a table.
+
+    Returned when indexing a table with a DataColSchema. Provides
+    direct interaction with the underlying numpy arrays.
+
+    Attributes:
+        table: The table containing the data.
+        schema: The schema definition for this column.
+        col_id: The internal array index for this column.
+    """
     table: PackedArrayTable
     schema: S
     col_id: int
 
     @property
     def view(self) -> np.ndarray[Any, np.dtype[T]]:
+        """Access the raw numpy view of the packed array.
+
+        This provides direct, zero-overhead access to the contiguous array
+        backing this column, suitable for passing to Numba or vectorized
+        Numpy operations.
+
+        Returns:
+            A numpy array view of the active elements.
+        """
         return cast(
             np.ndarray[Any, np.dtype[T]],
             self.table.arrays[self.col_id].view,
@@ -395,6 +434,17 @@ class SchemaAccessor[T: np.generic, S: ColSchemaLike]:
 
 @dataclass(slots=True)
 class ForeignKeySchemaAccessor[T: np.generic](SchemaAccessor[T, ForeignKeySchema[T]]):
+    """Provides a typed view into a foreign key column.
+
+    Returned when indexing a table with a ForeignKeySchema. In addition to
+    raw array access, it provides methods for querying adjacency lists.
+
+    Attributes:
+        table: The table containing the foreign key.
+        schema: The foreign key schema definition.
+        col_id: The internal array index for this column.
+        target_table: The table this foreign key points to.
+    """
     table: PackedArrayTable
     schema: ForeignKeySchema[T]
     col_id: int
@@ -407,6 +457,17 @@ class ForeignKeySchemaAccessor[T: np.generic](SchemaAccessor[T, ForeignKeySchema
     def get_referencing_indices(
         self, head_indices: Iterable[int]
     ) -> tuple[tuple[int, ...], ...]:
+        """Fetch the list of row indices that reference given targets.
+
+        Uses the dynamically injected adjacency list columns to traverse
+        relationships backwards in O(K) time, where K is the number of incident edges.
+
+        Args:
+            head_indices: The target row indices to query incoming links for.
+
+        Returns:
+            A tuple containing a tuple of referring row indices for each target.
+        """
         head_indices = tuple(head_indices)
 
         vw_adj_head = self.target_table[self.schema.adj_head].view

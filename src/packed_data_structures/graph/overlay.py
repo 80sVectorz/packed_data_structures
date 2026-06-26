@@ -19,9 +19,11 @@ from packed_data_structures.database import PackedArrayDB
 
 
 class GraphFeature:
-    """Base for components attached to graph layers.
+    """Base class for modular components attached to graph layers.
 
-    Encourages declarative schema definition via class attributes.
+    Features encapsulate data schemas (columns) and business logic (hooks)
+    that can be attached to nodes or edges. They encourage declarative
+    schema definition via class attributes.
     """
 
     def on_attach(self, layer: BaseGraphLayer):
@@ -37,7 +39,11 @@ class GraphFeature:
 
 
 class BaseGraphLayer(SupportsGetTableSchema):
-    """Base class for Graph Layers."""
+    """Base class representing a logical layer in a graph (Nodes or Edges).
+
+    A layer maps to a single underlying PackedArrayTable but manages its
+    schema and attached features at a higher semantic level.
+    """
 
     name: str
     overlay: GraphOverlay
@@ -70,7 +76,20 @@ class BaseGraphLayer(SupportsGetTableSchema):
     def add_entry(self, **kwargs) -> int: ...
 
     def add_entry(self, data: dict[ColSchemaLike, Any] | None = None, **kwargs) -> int:
-        """Add a row to the layer using Typed Keys (Schema Objects) or String Keys."""
+        """Add a single row to the layer's underlying table.
+
+        Allows specifying values via schema objects in `data` or via string keys as keyword arguments.
+
+        Args:
+            data: A dictionary of values keyed by column schema objects.
+            **kwargs: Values keyed by column string names.
+
+        Returns:
+            The row index of the newly added entry.
+
+        Raises:
+            RuntimeError: If the database has not been initialized yet.
+        """
         record = {}
         if data:
             record.update(data)
@@ -86,6 +105,7 @@ class BaseGraphLayer(SupportsGetTableSchema):
 
 
 class NodeLayer(BaseGraphLayer):
+    """A layer representing a set of distinct vertices (nodes) in the graph."""
     def __init__(self, name: str, overlay: GraphOverlay):
         super().__init__(name, overlay)
         # Immediate Schema Instantiation
@@ -94,6 +114,15 @@ class NodeLayer(BaseGraphLayer):
 
 
 class EdgeLayer(BaseGraphLayer):
+    """A layer representing a set of directed connections (edges) between nodes.
+
+    Automatically injects Foreign Key schemas for `src` and `tgt` pointers,
+    ensuring adjacency lists are built automatically for any connected NodeLayers.
+
+    Attributes:
+        src: The injected ForeignKeySchema pointing to the source NodeLayer.
+        tgt: The injected ForeignKeySchema pointing to the target NodeLayer.
+    """
     src: ForeignKeySchema
     tgt: ForeignKeySchema
 
@@ -155,6 +184,12 @@ class EdgeLayer(BaseGraphLayer):
 
 @dataclass(init=False)
 class GraphOverlay(DbOverlay):
+    """An Overlay that organizes tables into a Graph abstraction.
+
+    Groups tables into NodeLayers and EdgeLayers, automating the setup of
+    foreign keys and adjacency lists. Acts as a high-level factory for building
+    complex graph databases via DoD arrays.
+    """
     _db: PackedArrayDB | None
     index_dtype: Any
 

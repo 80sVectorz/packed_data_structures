@@ -16,8 +16,8 @@ class PackedArray[T: np.generic](
     """Base packed array class.
 
     Acts as an interface between user-side functions and the actual data.
-    It handles things like resizing and maintaining contiguity.
-    Uses a swap based removal approach.
+    It uses a swap-and-pop based removal approach to maintain contiguity.
+    Underlying storage and resizing logic are delegated to an internal buffer.
     """
 
     resize_factor: int | float
@@ -331,6 +331,17 @@ class PackedArray[T: np.generic](
 
 @dataclass(slots=True)
 class PackedArrayBuffer[T: np.generic]:
+    """Implements amortized resizable array logic.
+
+    Tracks both the true allocated capacity and the virtual size (the number
+    of active elements). Handles the underlying memory allocation and geometric
+    resizing of the numpy array.
+
+    Attributes:
+        true_size: The allocated capacity of the underlying array.
+        dtype: The numpy data type of the elements.
+        element_shape: The shape of individual elements.
+    """
     true_size: int
     dtype: DTypeLike
     element_shape: tuple[int, ...] = field(default_factory=tuple)

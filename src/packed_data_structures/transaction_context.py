@@ -36,7 +36,12 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class TopologyScratchpad:
-    """A sparse write-buffer for topology updates with cursor-based tracking."""
+    """A sparse write-buffer for topology updates with cursor-based tracking.
+
+    This scratchpad collects adjacency list patches (next, prev, head pointers)
+    during bulk edits before applying them to the physical arrays. This ensures
+    that swap-and-pop relocations and unlinks are resolved correctly.
+    """
 
     # Source Table Updates (adj_next / adj_prev)
     next_indices: np.ndarray
@@ -217,6 +222,23 @@ class TopologyScratchpad:
 
 
 class RemapOracle(NamedTuple):
+    """An oracle that answers where an index has moved during a bulk edit.
+
+    Because swap-and-pop edits move row indices, references (like foreign keys)
+    need to be remapped to their new physical locations. This oracle provides
+    the mapping rules for a specific table during a transaction commit.
+
+    Attributes:
+        set_null_unlinks_sorted: Sorted array of indices that should be set to null.
+        deletions_sorted: Sorted array of deleted row indices.
+        moves_from: Sorted array of original row indices that were relocated.
+        moves_to: The new physical indices corresponding to `moves_from`.
+        moves_to_sorted: A sorted version of `moves_to` for fast collision checks.
+        addition_destinations: Array of indices where new virtual rows were placed.
+        virtual_indices_start: The index where virtual (newly added) rows begin.
+        new_size: The total physical size of the table after the edit.
+        missing_index_sentinel: The integer sentinel representing a missing link.
+    """
     set_null_unlinks_sorted: np.ndarray
     deletions_sorted: np.ndarray
     moves_from: np.ndarray
@@ -349,7 +371,12 @@ class DeletionTraceback:
 
 @dataclass(slots=True)
 class TransactionContext:
-    """A transaction context that's used to efficiently stage and bulk commit edits."""
+    """A transaction context that's used to efficiently stage and bulk commit edits.
+
+    Batches additions, updates, and deletions across all tables. When the context
+    exits, it calculates a global bulk-edit plan, updates the adjacency lists
+    safely across all foreign keys, and commits the changes in one pass.
+    """
 
     db: PackedArrayDB
 

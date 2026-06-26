@@ -18,7 +18,14 @@ class SchemaRegistry:
     def register_table(self, schema: TableSchema) -> None:
         """Register an existing TableSchema object.
 
-        Flushes any pending columns waiting for this table name.
+        Flushes any pending columns waiting for this table name and
+        injects them into the schema before it is finalized.
+
+        Args:
+            schema: The TableSchema to register.
+
+        Raises:
+            ValueError: If a table with the same name is already registered.
         """
         if schema.name in self._tables:
             raise ValueError(f"Table '{schema.name}' is already registered.")
@@ -32,9 +39,16 @@ class SchemaRegistry:
             del self._pending_cols[schema.name]
 
     def ensure_table(self, name: str, index_spec: IndexSpec) -> TableSchema:
-        """Retrieves a table definition or creates it if it doesn't exist.
+        """Retrieve a table definition or create it if it doesn't exist.
 
         Automatically flushes any pending columns into the new table.
+
+        Args:
+            name: The name of the table.
+            index_spec: The index specification to use if the table must be created.
+
+        Returns:
+            The newly created or existing TableSchema.
         """
         if name not in self._tables:
             tbl = TableSchema(name, index_spec, [])
@@ -49,10 +63,14 @@ class SchemaRegistry:
         return self._tables[name]
 
     def add_column(self, table_name: str, col: ColSchemaLike) -> None:
-        """Registers a column for a specific table.
+        """Register a column for a specific table.
 
         If the table exists, the column is added immediately.
-        If not, the column is queued until ensure_table is called.
+        If not, the column is queued until `ensure_table` or `register_table` is called.
+
+        Args:
+            table_name: The name of the target table.
+            col: The column schema to inject.
         """
         if table_name in self._tables:
             self._tables[table_name].register_new_column(col)

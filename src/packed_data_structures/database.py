@@ -18,6 +18,16 @@ from packed_data_structures.transaction_context import TransactionContext
 
 @dataclass(slots=True, init=False)
 class PackedArrayDB(ProvidesDirtyTimestamp):
+    """The core container managing a collection of PackedArrayTables.
+
+    Acts as the central registry for tables and coordinates transactions
+    across them.
+
+    Attributes:
+        table_ids: A mapping from table names to their internal indices.
+        table_schemas: A tuple of all registered TableSchemas.
+        tables: A tuple of the instantiated PackedArrayTables.
+    """
     table_ids: dict[str, int] = field(init=False)
     table_schemas: tuple[TableSchema, ...] = field(init=False)
     tables: tuple[PackedArrayTable, ...] = field(init=False)
