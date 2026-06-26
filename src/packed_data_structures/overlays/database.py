@@ -13,7 +13,12 @@ from .hooks import TransactionHook
 
 @dataclass(init=False)
 class OverlaidDB(PackedArrayDB):
-    """A PackedArrayDB that builds itself from Overlays."""
+    """A PackedArrayDB that builds itself from Overlays.
+
+    Upon initialization, it compiles the declarative schemas from all
+    provided overlays into flat tables, and binds the overlays to
+    the runtime.
+    """
 
     table_ids: dict[str, int] = field(init=False)
     table_schemas: tuple[TableSchema, ...] = field(init=False)
@@ -40,6 +45,11 @@ class OverlaidDB(PackedArrayDB):
             o.bind(self)
 
     def transaction(self) -> TransactionContext:
+        """Create or return the active overlaid transaction context.
+
+        Returns:
+            The active transaction context.
+        """
         ctx = self._transaction_ctx
         if ctx is None:
             ctx = _OverlaidTransactionContext(self)
@@ -49,7 +59,11 @@ class OverlaidDB(PackedArrayDB):
 
 @dataclass()
 class _OverlaidTransactionContext(TransactionContext):
-    """Enhanced Context that delegates lifecycle events to Hooks."""
+    """Enhanced TransactionContext that delegates lifecycle events to Hooks.
+
+    Collects TransactionHooks from all bound overlays and triggers them
+    at specific points during the transaction lifecycle (e.g., pre-commit).
+    """
 
     hooks: list[TransactionHook] = field(init=False, default_factory=list)
 
@@ -93,14 +107,14 @@ class _OverlaidTransactionContext(TransactionContext):
                     continue
 
                 table = self.db.get_table(tbl_name)
-                # Calculate the start of the virtual ID range for the current buffer
+                # Calculate the start of the staged ID range for the current buffer
                 buf_len = len(self.additions[tbl_name][0])
-                virt_start = self._virtual_counters[tbl_name] - buf_len
+                staged_start = self._staged_counters[tbl_name] - buf_len
 
                 for row_id, col_map in rows.items():
-                    # We only patch Virtual IDs (new rows) here
-                    if row_id >= virt_start:
-                        offset = row_id - virt_start
+                    # We only patch Staged IDs (new rows) here
+                    if row_id >= staged_start:
+                        offset = row_id - staged_start
                         for col_name, val in col_map.items():
                             col_idx = table.column_ids[col_name]
                             self.additions[tbl_name][col_idx][offset] = val

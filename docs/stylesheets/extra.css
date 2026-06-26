@@ -1,0 +1,26 @@
+/* Add a simple visual divider above each mkdocstrings API object */
+.doc-object {
+    border-top: 1px solid var(--md-default-fg-color--lightest);
+    margin-top: 3rem;
+    padding-top: 1rem;
+}
+
+/* Remove the divider from the very first item on the page */
+.doc-object:first-child {
+    border-top: none;
+    margin-top: 0;
+    padding-top: 0;
+}
+
+/* Ensure the heading sits neatly below the divider */
+.doc-heading,
+.doc-symbol-heading {
+    margin-top: 0 !important;
+}
+
+/* Indent the contents (docstrings, parameters, methods) of classes and functions */
+.doc-contents {
+    margin-left: 1.5rem;
+    padding-left: 1rem;
+    border-left: 2px solid var(--md-default-fg-color--lightest);
+}

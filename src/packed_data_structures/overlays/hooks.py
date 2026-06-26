@@ -26,7 +26,7 @@ class TransactionHook(Protocol):
         Return a dictionary of updates:
             {TableName: {RowID: {ColName: Value}}}
 
-        RowID can be a Virtual ID (for rows just added). The DB will apply
+        RowID can be a Staged ID (for rows just added). The DB will apply
         these updates to the staging buffer before committing.
         """
         ...

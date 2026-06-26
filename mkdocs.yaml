@@ -1,0 +1,65 @@
+site_name: Packed Data Structures
+site_url: https://80svectorz.github.io/packed_data_structures/
+repo_url: https://github.com/80sVectorz/packed_data_structures
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: teal
+      accent: teal
+  features:
+    - navigation.tabs
+    - content.code.copy
+    - toc.follow
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_root_heading: true
+            show_source: true
+            separate_signature: true
+            show_signature_annotations: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_style: material
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.arithmatex:
+      generic: true
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - Guide:
+      - The Schemas System: guide/schemas.md
+      - Public API & CRUD: guide/crud.md
+      - Technical Architecture: guide/architecture.md
+      - The Overlays Pattern: guide/overlays.md
+      - "Bonus: Dirty Tracking": guide/dirty_tracking.md
+  - API Reference:
+      - Schemas: reference/schemas.md
+      - Database: reference/database.md
+      - Table: reference/table.md
+      - Transaction Context: reference/transaction_context.md
+      - Packed Array: reference/packed_array.md
+      - Dirty Tracking: reference/dirty_tracking.md

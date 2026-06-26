@@ -17,15 +17,27 @@ class DbOverlay:
     """
 
     def register_schema(self, registry: SchemaRegistry) -> None:
-        """Phase 1: Define tables and inject columns."""
+        """Phase 1: Define tables and inject columns into the registry.
+
+        Args:
+            registry: The central schema registry.
+        """
         pass
 
     def create_hooks(self) -> list[TransactionHook]:
-        """Phase 2: Return new hooks for a transaction."""
+        """Phase 2: Return new hooks for a transaction lifecycle.
+
+        Returns:
+            A list of transaction hooks.
+        """
         return []
 
     def bind(self, db: PackedArrayDB) -> None:
-        """Phase 3: Cache DB accessors for the runtime API."""
+        """Phase 3: Bind the overlay to the live database instance.
+
+        Args:
+            db: The database instance this overlay abstracts.
+        """
         pass
 
 
@@ -38,3 +50,4 @@ class DbFeature:
     # Note: Specific implementations (like GraphFeature) usually subclass this
     # to enforce type safety on the 'layer' argument.
     pass
+
