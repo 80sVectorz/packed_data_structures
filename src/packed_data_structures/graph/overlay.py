@@ -113,7 +113,7 @@ class NodeLayer(BaseGraphLayer):
         self.schema = TableSchema(name, spec, [])
 
 
-class EdgeLayer(BaseGraphLayer):
+class EdgeLayer[T: np.generic](BaseGraphLayer):
     """A layer representing a set of directed connections (edges) between nodes.
 
     Automatically injects Foreign Key schemas for `src` and `tgt` pointers,
@@ -123,8 +123,8 @@ class EdgeLayer(BaseGraphLayer):
         src: The injected ForeignKeySchema pointing to the source NodeLayer.
         tgt: The injected ForeignKeySchema pointing to the target NodeLayer.
     """
-    src: ForeignKeySchema
-    tgt: ForeignKeySchema
+    src: ForeignKeySchema[T]
+    tgt: ForeignKeySchema[T]
 
     def __init__(
         self, name: str, overlay: GraphOverlay, source: NodeLayer, target: NodeLayer
@@ -183,7 +183,7 @@ class EdgeLayer(BaseGraphLayer):
 
 
 @dataclass(init=False)
-class GraphOverlay(DbOverlay):
+class GraphOverlay[T_idx: np.generic](DbOverlay):
     """An Overlay that organizes tables into a Graph abstraction.
 
     Groups tables into NodeLayers and EdgeLayers, automating the setup of
@@ -191,9 +191,9 @@ class GraphOverlay(DbOverlay):
     complex graph databases via DoD arrays.
     """
     _db: PackedArrayDB | None
-    index_dtype: Any
+    index_dtype: np.dtype[T_idx]
 
-    def __init__(self, index_dtype=np.uint32):
+    def __init__(self, index_dtype: T_idx = np.uint32):
         self.index_dtype = index_dtype
         self.layers: dict[str, BaseGraphLayer] = {}
         self._db = None
@@ -207,7 +207,7 @@ class GraphOverlay(DbOverlay):
 
     def add_edge_layer(
         self, name: str, source: NodeLayer, target: NodeLayer, features=None
-    ) -> EdgeLayer:
+    ) -> EdgeLayer[T_idx]:
         layer = EdgeLayer(name, self, source, target)
         self.layers[name] = layer
         for f in features or []:
