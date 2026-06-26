@@ -1,6 +1,7 @@
 # Packed Data Structures
+[![Documentation](https://img.shields.io/badge/docs-GitHub_Pages-blue.svg)](https://80svectorz.github.io/packed_data_structures/)
 
-Welcome to the documentation for **Packed Data Structures**!
+A flexible, Data-Oriented, swap-and-pop based database system that grants direct memory access to the underlying data structures.
 
 ## Overview
 
@@ -23,3 +24,8 @@ While no system can entirely eliminate this physical reality, `packed_data_struc
 This package is designed to support a range of usage styles. It provides high-level abstractions (like the Overlays system and automatic Schema mapping) to make building complex topologies ergonomic.
 
 However, when maximum execution speed is required, **ease of use can be traded in for performance**. You always have the option to bypass the high-level Python abstractions, extract the raw underlying NumPy arrays via the `.view` property, and write highly verbose, complex, but blazingly fast vectorized operations or Numba-JIT compiled kernels.
+
+## Documentation
+
+Full documentation, including a complete First-Principles Guide and API Reference, is available at:
+[https://80svectorz.github.io/packed_data_structures/](https://80svectorz.github.io/packed_data_structures/)
