@@ -61,5 +61,7 @@ nav:
       - Database: reference/database.md
       - Table: reference/table.md
       - Transaction Context: reference/transaction_context.md
+      - Remap Oracle: reference/remap_oracle.md
+      - Trackers: reference/trackers.md
       - Packed Array: reference/packed_array.md
       - Dirty Tracking: reference/dirty_tracking.md

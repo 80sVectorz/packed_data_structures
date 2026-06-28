@@ -18,10 +18,12 @@ from packed_data_structures.dirty_tracking import (
 
 from packed_data_structures.packed_array import PackedArray
 from packed_data_structures.schemas import (
+    ColSchemaLike,
+    DataColSchema,
+    FksOnDeleteStyle,
     ForeignKeySchema,
     SupportsGetTableSchema,
     TableSchema,
-    ColSchemaLike,
 )
 from packed_data_structures.nb_adjacency_list_helpers import (
     nb_count_adj_elements,
@@ -340,8 +342,8 @@ class PackedArrayTable(ProvidesDirtyTimestamp, SupportsGetTableSchema):
     def add_entry(
         self,
         entry_record: RecordRowMajor,
-    ) -> range:
-        return self.add_entries((entry_record,), "row_major")
+    ) -> int:
+        return self.add_entries((entry_record,), "row_major")[0]
 
     def del_entries(
         self, indices: Iterable[int] | np.ndarray[Any, np.dtype[np.bool_]]

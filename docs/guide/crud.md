@@ -64,11 +64,44 @@ with db.transaction():
         records_shape="col_major"
     )
 ```
-Bulk operations allow the underlying NumPy arrays to ingest all data simultaneously without the overhead of repeated Python function calls. Furthermore, returning a simple `range` of staged indices avoids allocating massive temporary lists in memory.
+Bulk operations allow the underlying NumPy arrays to ingest all data simultaneously without the overhead of repeated Python function calls. 
+
+**Why pure Python ranges?**  
+Staged IDs must operate independently of the table's physical index constraints (e.g., `uint8`). If a transaction contains many additions and deletions, intermediate staged IDs might temporarily exceed the bounds of the underlying datatype. By returning an unbound Python `range`, the system safely handles interim routing without risk of integer overflow.
+
+## Tracking IDs (The Tracker API)
+
+Because swap-and-pop deletions completely scramble physical row indices, tracking newly added staged IDs or existing IDs across a complex transaction can be challenging.
+
+To solve this, the `TransactionContext` provides an incredibly fast `create_tracker` method. This allows you to explicitly mark existing IDs or freshly staged IDs. Once the transaction commits and the Oracle maps all physical locations, the tracker can be queried for the final, strictly-typed index values.
+
+```python
+with db.transaction() as ctx:
+    # Add a massive batch of new items
+    staged_range = table_a.add_entries(..., "col_major")
+    
+    # We want to track where these items ACTUALLY end up post-commit.
+    # create_tracker can handle single values, ranges or arrays, and optimizes itself to your input.
+    tracker = ctx.create_tracker(table_a.schema, staged_range)
+    
+    # Do some complex deletions that shuffle the layout
+    table_a.del_entries([0, 10, 45, 99])
+
+# Post-commit, query the tracker to get strictly-typed final physical IDs
+final_ids_array = tracker.reify()
+```
+
+Trackers expose three memory modes via the `storage_method` keyword argument:
+
+- **`"hard"` (Default):** Safely copies the exact ID mapping out of the transaction so the Oracle can clean itself up.
+
+- **`"soft"`:** Creates a zero-copy direct memory view into the Oracle's trace mapping, but keeping this view alive prevents garbage collection of the larger trace context.
+
+- **`"auto"`:** Dynamically uses size heuristics to decide whether to create a hard copy or soft view based on memory footprint.
 
 ## Reading and Mutating Data
 
-One of the defining features of `packed_data_structures` is that reading and updating raw data columns does *not* require special methods. Because columns are just NumPy arrays, you can index into them directly using the `.view` property.
+One of the defining features of `packed_data_structures` is that reading and updating raw data columns doesn't require special methods. Because columns are just NumPy arrays, you can index into them directly using the `.view` property.
 
 ```python
 # Access the raw, zero-overhead NumPy array backing the weight column

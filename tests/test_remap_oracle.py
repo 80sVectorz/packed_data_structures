@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 
-from packed_data_structures.transaction_context import (
+from packed_data_structures.remap_oracle import (
     RemapOracle,
     oracle_resolve,
     oracle_resolve_array,
