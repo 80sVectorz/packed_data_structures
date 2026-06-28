@@ -212,7 +212,7 @@ class PackedArrayTable(ProvidesDirtyTimestamp, SupportsGetTableSchema):
 
         n_records = max(len(values) for _, values in records_intermediate)
 
-        if any(len(values) != n_records for values in records_intermediate):
+        if any(len(values) != n_records for _, values in records_intermediate):
             raise ValueError(
                 "Could not normalize columnar records data. Received misaligned columns."
             )
@@ -224,13 +224,13 @@ class PackedArrayTable(ProvidesDirtyTimestamp, SupportsGetTableSchema):
             if isinstance(values, np.ndarray):
                 normalized_records[col_id] = values
             else:
-                normalized_records[col_id] = np.ndarray(
+                normalized_records[col_id] = np.array(
                     values, dtype=self.arrays[col_id].dtype
                 )
 
         for col_id in included_keys.symmetric_difference(self.column_ids.values()):
             normalized_records[col_id] = np.full(
-                n_records,
+                (n_records, *self.arrays[col_id].element_shape),
                 self.arrays[col_id].empty_fill,
                 dtype=self.arrays[col_id].dtype,
             )

@@ -13,6 +13,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+pythonpath = ["src"]
 
 [tool.uv.sources]
 packed-data-structures = { workspace = true }
@@ -22,6 +23,7 @@ dev = [
     "hypothesis>=6.150.0",
     "pytest>=9.0.2",
     "ruff>=0.11.0",
+    "pytest-cov>=7.1.0",
 ]
 docs = [
     "mkdocs>=1.6.1",

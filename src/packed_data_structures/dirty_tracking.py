@@ -160,7 +160,7 @@ class DirtyTrackingArray[T_s: tuple[Any, ...] | Any, T_dt: np.generic](
                 if isinstance(o, DirtyTrackingArray) and o.timestamp_ref is not None:
                     o.timestamp_ref.update()
             # When numpy returns a tuple for multiple outputs, mimic numpy's contract
-            return result
+            return outputs[0] if len(outputs) == 1 else outputs
 
         return result
 
