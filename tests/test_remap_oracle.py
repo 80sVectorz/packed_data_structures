@@ -45,7 +45,9 @@ def test_remap_oracle_resolve(name, resolve_fn):
     assert resolve_fn(15, oracle) == 999
 
 
-@pytest.mark.parametrize("name, resolve_array_fn", get_func_variants(oracle_resolve_array))
+@pytest.mark.parametrize(
+    "name, resolve_array_fn", get_func_variants(oracle_resolve_array)
+)
 def test_remap_oracle_resolve_array(name, resolve_array_fn):
 
     oracle = RemapOracle(

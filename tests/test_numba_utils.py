@@ -14,6 +14,7 @@ from packed_data_structures.nb_adjacency_list_helpers import (
 )
 from .testing_utils import get_func_variants
 
+
 @pytest.mark.parametrize(
     "name, nb_array_mapping_get_fn", get_func_variants(nb_array_mapping_get)
 )
