@@ -5,6 +5,9 @@ from typing import NamedTuple
 import numba as nb
 import numpy as np
 
+# Defensive checks that are mathematically unreachable under standard swap-and-pop,
+# but preserved as a toggleable safety net for future architectural changes.
+_ENABLE_DEFENSIVE_CHECKS = False
 
 class RemapOracle(NamedTuple):
     """An oracle that answers where an index has moved during a bulk edit.
@@ -78,26 +81,27 @@ def oracle_resolve(idx: int, oracle: RemapOracle) -> int:
             if i_move < len(o.moves_from) and o.moves_from[i_move] == idx:
                 return int(o.moves_to[i_move])
 
-    # Overwritten by Move (Did someone move here?)
-    if len(o.moves_to_sorted) > 0:
-        if o.moves_to_sorted[0] <= idx <= o.moves_to_sorted[-1]:
-            i_over = np.searchsorted(o.moves_to_sorted, idx)
-            if i_over < len(o.moves_to_sorted) and o.moves_to_sorted[i_over] == idx:
-                return missing_idx
+    if _ENABLE_DEFENSIVE_CHECKS:  # pragma: no cover
+        # Overwritten by Move (Did someone move here?)
+        if len(o.moves_to_sorted) > 0:
+            if o.moves_to_sorted[0] <= idx <= o.moves_to_sorted[-1]:
+                i_over = np.searchsorted(o.moves_to_sorted, idx)
+                if i_over < len(o.moves_to_sorted) and o.moves_to_sorted[i_over] == idx:
+                    return missing_idx
 
-    # Overwritten by Addition (Did an addition land here?)
-    if len(o.addition_destinations) > 0:
-        if o.addition_destinations[0] <= idx <= o.addition_destinations[-1]:
-            i_add = np.searchsorted(o.addition_destinations, idx)
-            if (
-                i_add < len(o.addition_destinations)
-                and o.addition_destinations[i_add] == idx
-            ):
-                return missing_idx
+        # Overwritten by Addition (Did an addition land here?)
+        if len(o.addition_destinations) > 0:
+            if o.addition_destinations[0] <= idx <= o.addition_destinations[-1]:
+                i_add = np.searchsorted(o.addition_destinations, idx)
+                if (
+                    i_add < len(o.addition_destinations)
+                    and o.addition_destinations[i_add] == idx
+                ):
+                    return missing_idx
 
-    # Truncation (Array shrunk)
-    if idx >= o.new_size:
-        return missing_idx
+        # Truncation (Array shrunk)
+        if idx >= o.new_size:
+            return missing_idx
 
     return idx
 

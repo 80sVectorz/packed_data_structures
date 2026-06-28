@@ -68,3 +68,9 @@ def test_remap_oracle_resolve_array(name, resolve_array_fn):
 
     expected = np.array([0, 1, 999, 3, 2, 999, 999], dtype=np.uint32)
     assert np.array_equal(resolved, expected)
+
+    # Test inplace=True
+    arr_inplace = np.array([0, 1, 2, 3, 4, 10, 999], dtype=np.uint32)
+    resolved_inplace = resolve_array_fn(arr_inplace, oracle, inplace=True)
+    assert np.array_equal(resolved_inplace, expected)
+    assert resolved_inplace is arr_inplace
