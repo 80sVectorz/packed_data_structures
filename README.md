@@ -1,5 +1,8 @@
+![Pytest](https://img.shields.io/badge/pytest-tested-orange)
+![Codecov](https://codecov.io/gh/80sVectorz/packed_data_structures/branch/main/graph/badge.svg)
+![GitHub Workflow Status](https://github.com/80sVectorz/packed_data_structures/actions/workflows/ci.yml/badge.svg)
+
 # Packed Data Structures
-[![Documentation](https://img.shields.io/badge/docs-GitHub_Pages-blue.svg)](https://80svectorz.github.io/packed_data_structures/)
 
 A flexible, Data-Oriented, swap-and-pop based database system that grants direct memory access to the underlying data structures.
 
