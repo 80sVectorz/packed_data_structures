@@ -49,9 +49,7 @@ class IdRange(Sequence[np.generic]):
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, IdRange):
-            return (
-                self._range == other._range and self.index_dtype == other.index_dtype
-            )
+            return self._range == other._range and self.index_dtype == other.index_dtype
         if isinstance(other, range):
             return self._range == other
         return False

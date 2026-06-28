@@ -33,6 +33,7 @@ from packed_data_structures.trackers import (
     ArrayTracker,
 )
 
+
 @dataclass(slots=True)
 class DeletionTraceback:
     steps: list[TableSchema | ForeignKeySchema] = field(
@@ -256,9 +257,6 @@ class TopologyScratchpad:
             )
 
 
-
-
-
 @dataclass(slots=True)
 class TransactionContext:
     """A transaction context that's used to efficiently stage and bulk commit edits.
@@ -355,7 +353,7 @@ class TransactionContext:
         self,
         table: str | SupportsGetTableSchema,
         ids: int | range | Sequence[int] | np.ndarray,
-        storage_method: Literal["auto", "hard", "soft"] = "hard"
+        storage_method: Literal["auto", "hard", "soft"] = "hard",
     ) -> BaseTracker:
         """Creates an explicit tracker to resolve physical IDs after a commit.
 
@@ -386,7 +384,7 @@ class TransactionContext:
         """
         schema = self.db.get_table_schema(table)
         idx_dtype = schema.index_spec.dtype
-        
+
         if isinstance(ids, int):
             tracker = SingleTracker(ids, idx_dtype, storage_method)
         elif isinstance(ids, range):
@@ -488,7 +486,7 @@ class TransactionContext:
         current_counter = self._staged_counters[table.name]
         n_additions = len(new_records[0]) if new_records else 0
         new_counter = current_counter + n_additions
-        
+
         self._staged_counters[table.name] = new_counter
 
         # Return staged indices
