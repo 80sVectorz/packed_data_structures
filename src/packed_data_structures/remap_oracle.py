@@ -9,6 +9,7 @@ import numpy as np
 # but preserved as a toggleable safety net for future architectural changes.
 _ENABLE_DEFENSIVE_CHECKS = False
 
+
 class RemapOracle(NamedTuple):
     """An oracle that answers where an index has moved during a bulk edit.
 
