@@ -20,22 +20,16 @@ def base_schemas():
     col_position = DataColSchema("position", np.float32, shape=(3,), default=0.0)
 
     table_a_schema = TableSchema(
-        name="table_a",
-        index_spec=idx_spec,
-        cols=[col_weight, col_position]
+        name="table_a", index_spec=idx_spec, cols=[col_weight, col_position]
     )
 
     fk_to_a = ForeignKeySchema(
         name="link_to_a",
         target_table=table_a_schema,
-        adjacency_conf=AdjacencyListConf(track_counts=True)
+        adjacency_conf=AdjacencyListConf(track_counts=True),
     )
 
-    table_b_schema = TableSchema(
-        name="table_b",
-        index_spec=idx_spec,
-        cols=[fk_to_a]
-    )
+    table_b_schema = TableSchema(name="table_b", index_spec=idx_spec, cols=[fk_to_a])
 
     return table_a_schema, table_b_schema
 
@@ -62,17 +56,15 @@ def populated_db(empty_db, base_schemas):
         staged_a = table_a.add_entries(
             records={
                 col_weight: [1.0, 2.0, 3.0],
-                col_position: [[0, 0, 0], [1, 1, 1], [2, 2, 2]]
+                col_position: [[0, 0, 0], [1, 1, 1], [2, 2, 2]],
             },
-            records_shape="col_major"
+            records_shape="col_major",
         )
-        
+
         # Add entries to table_b pointing to the entries in table_a
         table_b.add_entries(
-            records={
-                fk_to_a: [staged_a[0], staged_a[1], staged_a[0]]
-            },
-            records_shape="col_major"
+            records={fk_to_a: [staged_a[0], staged_a[1], staged_a[0]]},
+            records_shape="col_major",
         )
 
     return empty_db
