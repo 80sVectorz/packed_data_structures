@@ -216,9 +216,7 @@ class PackedArray[T: np.generic](
     def remove(self, index: int) -> T:
         size = self._data.size
         if index >= size:
-            raise IndexError(
-                f"Remove failed. index out of range: {index} > {size - 1}"
-            )
+            raise IndexError(f"Remove failed. index out of range: {index} > {size - 1}")
         if index < -size:
             raise IndexError(f"Remove failed. index out of range: {index} < {-size}")
 
@@ -341,6 +339,7 @@ class PackedArrayBuffer[T: np.generic]:
         dtype: The numpy data type of the elements.
         element_shape: The shape of individual elements.
     """
+
     capacity: int
     dtype: DTypeLike
     element_shape: tuple[int, ...] = field(default_factory=tuple)

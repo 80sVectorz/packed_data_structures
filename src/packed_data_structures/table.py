@@ -65,6 +65,7 @@ class PackedArrayTable(ProvidesDirtyTimestamp, SupportsGetTableSchema):
         foreign_key_columns: Indices of columns that represent foreign keys.
         name: The string identifier of the table.
     """
+
     db: PackedArrayDB
     table_id: int
     schema: TableSchema
@@ -404,6 +405,7 @@ class SchemaAccessor[T: np.generic, S: ColSchemaLike]:
         schema: The schema definition for this column.
         col_id: The internal array index for this column.
     """
+
     table: PackedArrayTable
     schema: S
     col_id: int
@@ -445,6 +447,7 @@ class ForeignKeySchemaAccessor[T: np.generic](SchemaAccessor[T, ForeignKeySchema
         col_id: The internal array index for this column.
         target_table: The table this foreign key points to.
     """
+
     table: PackedArrayTable
     schema: ForeignKeySchema[T]
     col_id: int

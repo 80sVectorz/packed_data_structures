@@ -22,6 +22,7 @@ class IndexSpec[T: np.generic]:
         missing: The sentinel integer value representing a missing index.
         max_value: The maximum valid integer value for an index.
     """
+
     dtype: np.dtype[T]
     missing: int
     max_value: int
@@ -71,6 +72,7 @@ class ColSchemaLike[T: np.generic]:
         name: The string identifier for the column.
         parent_table: The TableSchema instance this column belongs to.
     """
+
     name: str
     parent_table: TableSchema = field(init=False)
 
@@ -104,6 +106,7 @@ class DataColSchema[T: np.generic](ColSchemaLike[T]):
         default: The default value used to fill empty or newly allocated slots.
         shape: The shape of individual elements. An empty tuple indicates scalar values.
     """
+
     name: str
     dtype: DTypeLike
     default: Any | tuple[Any, ...] = 0
@@ -172,6 +175,7 @@ class ForeignKeySchema[T: np.generic](ColSchemaLike[T]):
         adj_head: The injected head-pointer column in the target table.
         adj_count: The injected count column in the target table (if enabled).
     """
+
     name: str
     target_table: TableSchema
     on_delete: FksOnDeleteStyle = FksOnDeleteStyle.CASCADE
@@ -269,6 +273,7 @@ class TableSchema(SupportsGetTableSchema):
         cols: The list of column schemas defining the table structure.
         pre_allocate: The initial element capacity to allocate for the table's arrays.
     """
+
     name: str
     index_spec: IndexSpec
     cols: list[ColSchemaLike[Any]]

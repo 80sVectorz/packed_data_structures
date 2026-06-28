@@ -21,8 +21,8 @@ packed-data-structures = { workspace = true }
 [dependency-groups]
 dev = [
     "hypothesis>=6.150.0",
-    "packed-data-structures",
     "pytest>=9.0.2",
+    "ruff>=0.11.0",
     "pytest-cov>=7.1.0",
 ]
 docs = [

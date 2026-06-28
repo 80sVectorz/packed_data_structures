@@ -106,6 +106,7 @@ class BaseGraphLayer(SupportsGetTableSchema):
 
 class NodeLayer(BaseGraphLayer):
     """A layer representing a set of distinct vertices (nodes) in the graph."""
+
     def __init__(self, name: str, overlay: GraphOverlay):
         super().__init__(name, overlay)
         # Immediate Schema Instantiation
@@ -123,6 +124,7 @@ class EdgeLayer[T: np.generic](BaseGraphLayer):
         src: The injected ForeignKeySchema pointing to the source NodeLayer.
         tgt: The injected ForeignKeySchema pointing to the target NodeLayer.
     """
+
     src: ForeignKeySchema[T]
     tgt: ForeignKeySchema[T]
 
@@ -190,6 +192,7 @@ class GraphOverlay[T_idx: np.generic](DbOverlay):
     foreign keys and adjacency lists. Acts as a high-level factory for building
     complex graph databases via DoD arrays.
     """
+
     _db: PackedArrayDB | None
     index_dtype: np.dtype[T_idx]
 
