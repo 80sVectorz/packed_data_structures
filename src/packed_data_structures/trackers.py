@@ -252,7 +252,10 @@ class RangeTracker(BaseTracker):
             valid = (
                 (indices >= 0)
                 & (indices < len(self.original_ids))
-                & ((original_ids - self.original_ids.start) % self.original_ids.step == 0)
+                & (
+                    (original_ids - self.original_ids.start) % self.original_ids.step
+                    == 0
+                )
             )
             if not np.all(valid):
                 raise KeyError("Some Original IDs not tracked.")
