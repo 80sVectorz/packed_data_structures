@@ -12,14 +12,7 @@ from packed_data_structures.nb_adjacency_list_helpers import (
     nb_count_adj_elements,
     nb_get_adj_elements,
 )
-
-
-def get_func_variants(func):
-    """Returns a list of (name, function) for both JIT compiled and pure python versions."""
-    return [
-        (f"{func.__name__}_jit", func),
-        (f"{func.__name__}_py", getattr(func, "py_func", func)),
-    ]
+from .testing_utils import get_func_variants
 
 
 @pytest.mark.parametrize(

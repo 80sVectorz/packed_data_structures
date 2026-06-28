@@ -98,7 +98,7 @@ class BaseGraphLayer(SupportsGetTableSchema):
         if not self.overlay._db:
             raise RuntimeError("DB not initialized")
 
-        return self.overlay._db.get_table(self.name).add_entry(record)[0]
+        return self.overlay._db.get_table(self.name).add_entry(record)
 
     def get_table_schema(self) -> TableSchema:
         return self.schema

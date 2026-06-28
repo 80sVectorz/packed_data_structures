@@ -1,6 +1,7 @@
 from __future__ import annotations
+from typing import Literal
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NamedTuple, cast, overload
 
@@ -24,6 +25,41 @@ from packed_data_structures.schemas import (
     TableSchema,
 )
 from packed_data_structures.table import NormalizedUpdatesColMajor, PackedArrayTable
+from packed_data_structures.remap_oracle import RemapOracle, oracle_resolve_array
+from packed_data_structures.trackers import (
+    BaseTracker,
+    SingleTracker,
+    RangeTracker,
+    ArrayTracker,
+)
+
+
+@dataclass(slots=True)
+class DeletionTraceback:
+    steps: list[TableSchema | ForeignKeySchema] = field(
+        init=False, default_factory=list
+    )
+
+    def start(self, table: SupportsGetTableSchema):
+        self.steps = [table.get_table_schema()]
+
+    def new_stage(self, col: ForeignKeySchema):
+        self.steps.append(col)
+
+    def stage_finished(self):
+        self.steps.pop()
+
+    def __str__(self) -> str:
+        str_steps = []
+        for step in self.steps:
+            if isinstance(step, TableSchema):
+                str_steps.append(step.name)
+            elif isinstance(step, ForeignKeySchema):
+                str_steps.append(
+                    f"{step.on_delete.name}->'{step.parent_table.name}'.'{step.name}'"
+                )
+
+        return "->".join(str_steps)
 
 
 if TYPE_CHECKING:
@@ -221,155 +257,6 @@ class TopologyScratchpad:
             )
 
 
-class RemapOracle(NamedTuple):
-    """An oracle that answers where an index has moved during a bulk edit.
-
-    Because swap-and-pop edits move row indices, references (like foreign keys)
-    need to be remapped to their new physical locations. This oracle provides
-    the mapping rules for a specific table during a transaction commit.
-
-    Attributes:
-        set_null_unlinks_sorted: Sorted array of indices that should be set to null.
-        deletions_sorted: Sorted array of deleted row indices.
-        moves_from: Sorted array of original row indices that were relocated.
-        moves_to: The new physical indices corresponding to `moves_from`.
-        moves_to_sorted: A sorted version of `moves_to` for fast collision checks.
-        addition_destinations: Array of indices where new staged rows were placed.
-        staged_indices_start: The index where staged (newly added) rows begin.
-        new_size: The total physical size of the table after the edit.
-        missing_index_sentinel: The integer sentinel representing a missing link.
-    """
-
-    set_null_unlinks_sorted: np.ndarray
-    deletions_sorted: np.ndarray
-    moves_from: np.ndarray
-    moves_to: np.ndarray
-    moves_to_sorted: np.ndarray
-    addition_destinations: np.ndarray
-    staged_indices_start: int
-    new_size: int
-    missing_index_sentinel: int
-
-
-@nb.njit(inline="always")
-def oracle_resolve(idx, oracle: RemapOracle) -> int:
-    o = oracle
-    missing_idx = o.missing_index_sentinel
-
-    # Staged IDs (New Additions)
-    if idx >= o.staged_indices_start:
-        offset = idx - o.staged_indices_start
-        if offset < len(o.addition_destinations):
-            return int(o.addition_destinations[offset])
-        return missing_idx
-
-    # Explicit Deletions
-    if len(o.deletions_sorted) > 0:
-        # Optimization: fast range check before binary search
-        if o.deletions_sorted[0] <= idx <= o.deletions_sorted[-1]:
-            i_del = np.searchsorted(o.deletions_sorted, idx)
-            if i_del < len(o.deletions_sorted) and o.deletions_sorted[i_del] == idx:
-                return missing_idx
-
-    # Moves (Did I move?)
-    if len(o.moves_from) > 0:
-        if o.moves_from[0] <= idx <= o.moves_from[-1]:
-            i_move = np.searchsorted(o.moves_from, idx)
-            if i_move < len(o.moves_from) and o.moves_from[i_move] == idx:
-                return int(o.moves_to[i_move])
-
-    # Overwritten by Move (Did someone move here?)
-    if len(o.moves_to_sorted) > 0:
-        if o.moves_to_sorted[0] <= idx <= o.moves_to_sorted[-1]:
-            i_over = np.searchsorted(o.moves_to_sorted, idx)
-            if i_over < len(o.moves_to_sorted) and o.moves_to_sorted[i_over] == idx:
-                return missing_idx
-
-    # Overwritten by Addition (Did an addition land here?)
-    if len(o.addition_destinations) > 0:
-        if o.addition_destinations[0] <= idx <= o.addition_destinations[-1]:
-            i_add = np.searchsorted(o.addition_destinations, idx)
-            if (
-                i_add < len(o.addition_destinations)
-                and o.addition_destinations[i_add] == idx
-            ):
-                return missing_idx
-
-    # Truncation (Array shrunk)
-    if idx >= o.new_size:
-        return missing_idx
-
-    return idx
-
-
-@nb.njit(cache=True, parallel=True)
-def oracle_resolve_array(
-    values: np.ndarray,
-    oracle: RemapOracle,
-    inplace: bool = False,
-) -> np.ndarray:
-    """Translate a list of indices through a RemapOracle.
-
-    This resolves:
-      - staged indices
-      - moved indices
-      - overwritten indices
-      - deletions
-
-    Args:
-        values: Array of indices referencing the oracle's table.
-        oracle: RemapOracle for the referenced table.
-        inplace: Preform the update in-place on the provided values array.
-
-    Returns:
-        New array with all indices translated to final physical indices
-        or missing sentinel.
-    """
-    if not inplace:
-        out = np.zeros_like(values)
-    else:
-        out = values
-
-    missing = oracle.missing_index_sentinel
-
-    for i in nb.prange(len(values)):
-        v = values[i]
-        if v == missing:
-            out[i] = missing
-        else:
-            out[i] = oracle_resolve(v, oracle)
-
-    return out
-
-
-@dataclass(slots=True)
-class DeletionTraceback:
-    steps: list[TableSchema | ForeignKeySchema] = field(
-        init=False, default_factory=list
-    )
-
-    def start(self, table: SupportsGetTableSchema):
-        self.steps = [table.get_table_schema()]
-
-    def new_stage(self, col: ForeignKeySchema):
-        self.steps.append(col)
-
-    def stage_finished(self):
-        self.steps.pop()
-
-    def __str__(self) -> str:
-        str_steps = []
-        for step in self.steps:
-            if isinstance(step, TableSchema):
-                str_steps.append(step.name)
-            elif isinstance(step, ForeignKeySchema):
-                str_steps.append(
-                    f"{step.on_delete.name}->'{step.parent_table.name}'.'{step.name}'"
-                )
-
-        return "->".join(str_steps)
-
-
 @dataclass(slots=True)
 class TransactionContext:
     """A transaction context that's used to efficiently stage and bulk commit edits.
@@ -420,19 +307,95 @@ class TransactionContext:
         init=False, default_factory=DeletionTraceback
     )
 
+    _trackers: defaultdict[str, list[BaseTracker]] = field(
+        init=False, default_factory=lambda: defaultdict(list)
+    )
+
     def __post_init__(self):
         self._staged_starts = {t.schema.name: len(t) for t in self.db.tables}
         self._staged_counters = self._staged_starts.copy()
 
-    def __enter__(self) -> None:
-        pass
+    def __enter__(self) -> TransactionContext:
+        return self
 
     def __exit__(self, exc_type, exc_value, exc_traceback) -> None:
         self.db._transaction_finished()
         if exc_type is None:
             self.commit()
 
-    # --- Edits registration ---
+    # --- Edits registration & tracking ---
+
+    @overload
+    def create_tracker(
+        self,
+        table: str | SupportsGetTableSchema,
+        ids: int,
+        storage_method: Literal["auto", "hard", "soft"] = "hard",
+    ) -> SingleTracker: ...
+
+    @overload
+    def create_tracker(
+        self,
+        table: str | SupportsGetTableSchema,
+        ids: range,
+        storage_method: Literal["auto", "hard", "soft"] = "hard",
+    ) -> RangeTracker: ...
+
+    @overload
+    def create_tracker(
+        self,
+        table: str | SupportsGetTableSchema,
+        ids: Sequence[int] | np.ndarray,
+        storage_method: Literal["auto", "hard", "soft"] = "hard",
+    ) -> ArrayTracker: ...
+
+    def create_tracker(
+        self,
+        table: str | SupportsGetTableSchema,
+        ids: int | range | Sequence[int] | np.ndarray,
+        storage_method: Literal["auto", "hard", "soft"] = "hard",
+    ) -> BaseTracker:
+        """Creates an explicit tracker to resolve physical IDs after a commit.
+
+        When working within a transaction, adding new entries or deleting existing
+        entries will cause the physical array layout to shift (via swap-and-pop).
+        Trackers safely resolve either staged IDs (newly added entries) or
+        original IDs (existing entries) to their final physical locations.
+
+        Args:
+            table: The table or schema the tracked IDs belong to.
+            ids: The ID or sequence of IDs to track. Can be a single integer,
+                a range object, a list/sequence of integers, or a numpy array.
+            storage_method: The strategy for managing the tracker's internal data:
+                - `"hard"`: Creates a clean, isolated copy of the mapped IDs.
+                  Safest option to prevent accidental memory leaks from the oracle.
+                - `"soft"`: Creates a direct view into the oracle's buffers. More
+                  efficient, but holding the tracker prevents oracle memory cleanup.
+                - `"auto"`: Dynamically chooses between `"hard"` and `"soft"` based
+                  on memory footprint heuristics (e.g. % of array viewed). Defaults
+                  to `"hard"`.
+
+        Returns:
+            BaseTracker: A specific tracker subclass (`SingleTracker`, `RangeTracker`,
+                or `ArrayTracker`) that can be queried or reified post-commit.
+
+        Raises:
+            TypeError: If the provided `ids` type is not supported.
+        """
+        schema = self.db.get_table_schema(table)
+        idx_dtype = schema.index_spec.dtype
+
+        if isinstance(ids, int):
+            tracker = SingleTracker(ids, idx_dtype, storage_method)
+        elif isinstance(ids, range):
+            tracker = RangeTracker(ids, idx_dtype, storage_method)
+        elif isinstance(ids, (np.ndarray, Sequence)):
+            tracker = ArrayTracker(ids, idx_dtype, storage_method)
+        else:
+            raise TypeError(f"Unsupported ids type: {type(ids)}")
+
+        self._trackers[schema.name].append(tracker)
+        return tracker
 
     def register_updates_col_major(
         self, table: TableSchema, updates: NormalizedUpdatesColMajor
@@ -497,7 +460,7 @@ class TransactionContext:
                     self.fk_updates[tbl_name][col_name][idx] = val
 
     def register_additions_col_major(
-        self, table: TableSchema, values: NormalizedRecordsColMajor
+        self, table: TableSchema, new_records: tuple[np.ndarray, ...]
     ) -> range:
         additions = self.additions.get(table.name)
         if additions is None:
@@ -507,7 +470,7 @@ class TransactionContext:
         for i, col in enumerate(table.cols):
             if isinstance(col, ForeignKeySchema):
                 if col.target_table.name in self.deletions:
-                    targets = values[i]
+                    targets = new_records[i]
                     target_deletions = self.deletions[col.target_table.name]
 
                     if not target_deletions.isdisjoint(targets):
@@ -516,23 +479,23 @@ class TransactionContext:
                         )
 
         for i, col in enumerate(table.cols):
-            additions[i].append(values[i])
+            additions[i].append(new_records[i])
             if isinstance(col, ForeignKeySchema):
-                self.new_fk_claims[col.target_table.name].update(values[i])
+                self.new_fk_claims[col.target_table.name].update(new_records[i])
 
         current_counter = self._staged_counters[table.name]
-        n_additions = len(values[0]) if values else 0
+        n_additions = len(new_records[0]) if new_records else 0
         new_counter = current_counter + n_additions
-        new_staged_ids = range(current_counter, new_counter)
 
         self._staged_counters[table.name] = new_counter
 
-        return new_staged_ids
+        # Return staged indices
+        return range(current_counter, new_counter)
 
     def register_additions_row_major(
-        self, table: TableSchema, values: tuple[NormalizedRecordRowMajor, ...]
+        self, table: TableSchema, new_records: tuple[tuple[Any, ...], ...]
     ) -> range:
-        additions_col_maj = tuple(np.array(a) for a in zip(*values, strict=True))
+        additions_col_maj = tuple(np.array(a) for a in zip(*new_records, strict=True))
         return self.register_additions_col_major(table, additions_col_maj)
 
     def register_deletions(self, table: TableSchema, indices: Iterable[int]):
@@ -1048,6 +1011,19 @@ class TransactionContext:
         dirty_tables = self.get_dirty_tables()
 
         oracles = {tbl: self._create_oracle(tbl) for tbl in dirty_tables}
+
+        # Fill trackers for dirty tables
+        for tbl_name, oracle in oracles.items():
+            if tbl_name in self._trackers:
+                for tracker in self._trackers[tbl_name]:
+                    tracker._fill(oracle)
+
+        # Fill trackers for non-dirty tables (identity mapping)
+        for tbl_name, trackers in self._trackers.items():
+            if tbl_name not in dirty_tables:
+                oracle = self._get_identity_oracle(tbl_name)
+                for tracker in trackers:
+                    tracker._fill(oracle)
 
         tbl_patches = {
             tbl: self._compute_topology_patches(tbl, oracles) for tbl in dirty_tables
