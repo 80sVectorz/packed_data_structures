@@ -7,8 +7,12 @@ from packed_data_structures.remap_oracle import (
     oracle_resolve_array,
 )
 
+from .testing_utils import get_func_variants
 
-def test_remap_oracle_resolve():
+
+@pytest.mark.parametrize("name, resolve_fn", get_func_variants(oracle_resolve))
+def test_remap_oracle_resolve(name, resolve_fn):
+
     oracle = RemapOracle(
         set_null_unlinks_sorted=np.array([], dtype=np.uint32),
         deletions_sorted=np.array([2, 5], dtype=np.uint32),
@@ -22,26 +26,28 @@ def test_remap_oracle_resolve():
     )
 
     # Unchanged
-    assert oracle_resolve(0, oracle) == 0
-    assert oracle_resolve(1, oracle) == 1
+    assert resolve_fn(0, oracle) == 0
+    assert resolve_fn(1, oracle) == 1
 
     # Deletions -> missing
-    assert oracle_resolve(2, oracle) == 999
-    assert oracle_resolve(5, oracle) == 999
+    assert resolve_fn(2, oracle) == 999
+    assert resolve_fn(5, oracle) == 999
 
     # Moves
-    assert oracle_resolve(8, oracle) == 2
-    assert oracle_resolve(9, oracle) == 5
+    assert resolve_fn(8, oracle) == 2
+    assert resolve_fn(9, oracle) == 5
 
     # Staged resolving to addition_destinations
-    assert oracle_resolve(10, oracle) == 10
-    assert oracle_resolve(11, oracle) == 11
+    assert resolve_fn(10, oracle) == 10
+    assert resolve_fn(11, oracle) == 11
 
     # Truncation out of bounds
-    assert oracle_resolve(15, oracle) == 999
+    assert resolve_fn(15, oracle) == 999
 
 
-def test_remap_oracle_resolve_array():
+@pytest.mark.parametrize("name, resolve_array_fn", get_func_variants(oracle_resolve_array))
+def test_remap_oracle_resolve_array(name, resolve_array_fn):
+
     oracle = RemapOracle(
         set_null_unlinks_sorted=np.array([], dtype=np.uint32),
         deletions_sorted=np.array([2], dtype=np.uint32),
@@ -56,7 +62,7 @@ def test_remap_oracle_resolve_array():
 
     arr = np.array([0, 1, 2, 3, 4, 10, 999], dtype=np.uint32)
 
-    resolved = oracle_resolve_array(arr, oracle, inplace=False)
+    resolved = resolve_array_fn(arr, oracle, inplace=False)
 
     expected = np.array([0, 1, 999, 3, 2, 999, 999], dtype=np.uint32)
     assert np.array_equal(resolved, expected)
