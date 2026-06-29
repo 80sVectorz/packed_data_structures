@@ -1,3 +1,4 @@
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 ![Pytest](https://img.shields.io/badge/pytest-tested-orange)
 ![Codecov](https://codecov.io/gh/80sVectorz/packed_data_structures/branch/main/graph/badge.svg)
 ![GitHub Workflow Status](https://github.com/80sVectorz/packed_data_structures/actions/workflows/ci.yml/badge.svg)
@@ -30,5 +31,4 @@ However, when maximum execution speed is required, **ease of use can be traded i
 
 ## Documentation
 
-Full documentation, including a complete First-Principles Guide and API Reference, is available at:
-[https://80svectorz.github.io/packed_data_structures/](https://80svectorz.github.io/packed_data_structures/)
+Full documentation, including a complete First-Principles Guide and API Reference, can be found [here](https://www.asciius.com/packed_data_structures)
