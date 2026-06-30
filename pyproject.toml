@@ -2,7 +2,7 @@
 name = "packed_data_structures"
 version = "0.1.0"
 description = "A flexible Data oriented swap-and-pop based direct memory access DB system"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = [
     "numpy",
     "numba",

@@ -1,6 +1,7 @@
 from __future__ import annotations
+from packed_data_structures import DataColSchema
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload, Unpack
 from collections.abc import Iterable, Sequence
 from collections.abc import Iterator
 
@@ -19,8 +20,6 @@ from packed_data_structures.dirty_tracking import (
 from packed_data_structures.packed_array import PackedArray
 from packed_data_structures.schemas import (
     ColSchemaLike,
-    DataColSchema,
-    FksOnDeleteStyle,
     ForeignKeySchema,
     SupportsGetTableSchema,
     TableSchema,
@@ -51,7 +50,9 @@ type NormalizedUpdatesColMajor = tuple[tuple[int, np.ndarray, np.ndarray], ...]
 
 
 @dataclass(slots=True)
-class PackedArrayTable(ProvidesDirtyTimestamp, SupportsGetTableSchema):
+class PackedArrayTable[T_idx: np.generic](
+    ProvidesDirtyTimestamp, SupportsGetTableSchema
+):
     """A tabular data structure backed by columnar PackedArrays.
 
     This is the primary user-facing class for interacting with the database.
@@ -70,7 +71,7 @@ class PackedArrayTable(ProvidesDirtyTimestamp, SupportsGetTableSchema):
 
     db: PackedArrayDB
     table_id: int
-    schema: TableSchema
+    schema: TableSchema[T_idx]
 
     column_ids: dict[ColSchemaLike | str, int] = field(init=False, default_factory=dict)
     arrays: tuple[PackedArray, ...] = field(init=False)
@@ -106,17 +107,22 @@ class PackedArrayTable(ProvidesDirtyTimestamp, SupportsGetTableSchema):
         return self._len
 
     @overload
-    def __getitem__(self, key: str) -> SchemaAccessor[Any, Any]: ...
+    def __getitem__(self, key: str) -> SchemaAccessor[ColSchemaLike, np.generic]: ...
 
     @overload
-    def __getitem__(
-        self, key: ForeignKeySchema[Any]
-    ) -> ForeignKeySchemaAccessor[Any]: ...
+    def __getitem__[T: np.generic, T_counts: np.generic](
+        self, key: ForeignKeySchema[T, T_idx, T_counts]
+    ) -> ForeignKeySchemaAccessor[T, T_idx, T_counts]: ...
+
+    @overload
+    def __getitem__[T: np.generic, T_shape: tuple[int, ...]](
+        self, key: DataColSchema[T, T_shape]
+    ) -> SchemaAccessor[DataColSchema[T, T_shape], T, T_shape]: ...
 
     @overload
     def __getitem__[T: np.generic](
         self, key: ColSchemaLike[T]
-    ) -> SchemaAccessor[T, ColSchemaLike[T]]: ...
+    ) -> SchemaAccessor[ColSchemaLike[T], T]: ...
 
     @overload
     def __getitem__(self, key: int) -> tuple[Any, ...]: ...
@@ -165,13 +171,12 @@ class PackedArrayTable(ProvidesDirtyTimestamp, SupportsGetTableSchema):
         for r in records:
             r_norm = default_record.copy()
             for k, v in r.items() if isinstance(r, dict) else r:
-                if isinstance(k, str):
-                    k = self.schema.cols[self.column_ids[k]]
+                assert isinstance(k, str | ColSchemaLike)
 
                 col_id = self.column_ids.get(k)
                 if col_id is None:
                     raise KeyError(
-                        f"Table '{self.schema.name}' does not contain the included column '{k.name}'"
+                        f"Table '{self.schema.name}' does not contain the included column '{k.name if isinstance(k, ColSchemaLike) else k}'"
                     )
                 r_norm[col_id] = v
 
@@ -192,15 +197,22 @@ class PackedArrayTable(ProvidesDirtyTimestamp, SupportsGetTableSchema):
         records: dict[ColSchemaLike, Sequence[Any]]
         | Sequence[tuple[ColSchemaLike, Sequence[Any]]],
     ) -> NormalizedRecordsColMajor:
-        last_key = None
+        last_key: ColSchemaLike | None = None
+        last_key = cast(
+            ColSchemaLike | None, last_key
+        )  # Fixes TY not seeing the walrus updates
         if isinstance(records, dict):
             try:
+                records = cast(dict[ColSchemaLike, Sequence[Any]], records)
                 records_intermediate = tuple(
                     (self.column_ids[last_key := k], v) for k, v in records.items()
                 )
             except KeyError:
+                assert last_key is not None and isinstance(
+                    last_key, str | ColSchemaLike
+                )
                 raise KeyError(
-                    f"Table '{self.schema.name}' does not contain the included column '{last_key}'"
+                    f"Table '{self.schema.name}' does not contain the included column '{last_key if isinstance(last_key, str) else last_key.name}'"
                 ) from None
         else:
             try:
@@ -208,8 +220,11 @@ class PackedArrayTable(ProvidesDirtyTimestamp, SupportsGetTableSchema):
                     (self.column_ids[last_key := k], v) for k, v in records
                 )
             except KeyError:
+                assert last_key is not None and isinstance(
+                    last_key, str | ColSchemaLike
+                )
                 raise KeyError(
-                    f"Table '{self.schema.name}' does not contain the included column '{last_key}'"
+                    f"Table '{self.schema.name}' does not contain the included column '{last_key if isinstance(last_key, str) else last_key.name}'"
                 ) from None
 
         n_records = max(len(values) for _, values in records_intermediate)
@@ -251,13 +266,10 @@ class PackedArrayTable(ProvidesDirtyTimestamp, SupportsGetTableSchema):
         normalized = []
 
         for key, data in iterator:
-            if isinstance(key, str):
-                col_id = self.column_ids.get(key)
-                if col_id is None:
-                    raise KeyError(f"Column '{key}' not found in table '{self.name}'")
-            else:
-                col_id = self.column_ids.get(key.name)
-                # Verify schema object belongs to this table if strictness is desired
+            assert isinstance(key, str | ColSchemaLike)
+            col_id = self.column_ids.get(key)
+            if col_id is None:
+                raise KeyError(f"Column '{key}' not found in table '{self.name}'")
 
             dtype = self.arrays[col_id].dtype
 
@@ -396,7 +408,11 @@ class PackedArrayTable(ProvidesDirtyTimestamp, SupportsGetTableSchema):
 
 
 @dataclass(slots=True)
-class SchemaAccessor[T: np.generic, S: ColSchemaLike]:
+class SchemaAccessor[
+    T_s: ColSchemaLike,
+    T: np.generic,
+    T_shape: tuple[int, ...] = tuple[int],
+]:
     """Provides a typed view into a specific column of a table.
 
     Returned when indexing a table with a DataColSchema. Provides
@@ -409,11 +425,11 @@ class SchemaAccessor[T: np.generic, S: ColSchemaLike]:
     """
 
     table: PackedArrayTable
-    schema: S
+    schema: T_s
     col_id: int
 
     @property
-    def view(self) -> np.ndarray[Any, np.dtype[T]]:
+    def view(self) -> np.ndarray[tuple[int, Unpack[T_shape]], np.dtype[T]]:
         """Access the raw numpy view of the packed array.
 
         This provides direct, zero-overhead access to the contiguous array
@@ -424,7 +440,7 @@ class SchemaAccessor[T: np.generic, S: ColSchemaLike]:
             A numpy array view of the active elements.
         """
         return cast(
-            np.ndarray[Any, np.dtype[T]],
+            np.ndarray[tuple[int, Unpack[T_shape]], np.dtype[T]],
             self.table.arrays[self.col_id].view,
         )
 
@@ -432,12 +448,16 @@ class SchemaAccessor[T: np.generic, S: ColSchemaLike]:
         return self.view.__getitem__(*args)
 
     @property
-    def arr(self) -> PackedArray[T]:
+    def arr(self) -> PackedArray[T, T_shape]:
         return self.table.arrays[self.col_id]
 
 
 @dataclass(slots=True)
-class ForeignKeySchemaAccessor[T: np.generic](SchemaAccessor[T, ForeignKeySchema[T]]):
+class ForeignKeySchemaAccessor[
+    T: np.generic,
+    T_parent: np.generic,
+    T_counts: np.generic,
+](SchemaAccessor[ForeignKeySchema[T, T_parent, T_counts], T]):
     """Provides a typed view into a foreign key column.
 
     Returned when indexing a table with a ForeignKeySchema. In addition to
@@ -451,10 +471,10 @@ class ForeignKeySchemaAccessor[T: np.generic](SchemaAccessor[T, ForeignKeySchema
     """
 
     table: PackedArrayTable
-    schema: ForeignKeySchema[T]
+    schema: ForeignKeySchema[T, T_parent, T_counts]
     col_id: int
 
-    target_table: PackedArrayTable = field(init=False)
+    target_table: PackedArrayTable[T] = field(init=False)
 
     def __post_init__(self):
         self.target_table = self.table.db.get_table(self.schema.target_table)
@@ -493,4 +513,4 @@ class ForeignKeySchemaAccessor[T: np.generic](SchemaAccessor[T, ForeignKeySchema
 
         nb_get_adj_elements(head_indices, counts, vw_adj_head, vw_adj_next, out=indices)
 
-        return tuple(tuple(v.astype(int)) for v in indices)  # type: ignore
+        return tuple(tuple(v.astype(int)) for v in indices)

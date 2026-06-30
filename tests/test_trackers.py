@@ -1,6 +1,5 @@
 import pytest
 import numpy as np
-from packed_data_structures.schemas import TableSchema, IndexSpec
 
 
 def test_single_tracker_basic(populated_db, base_schemas):
@@ -22,7 +21,7 @@ def test_single_tracker_basic(populated_db, base_schemas):
     # row 2 moved to 0
     assert tracker.reify() == 0
     assert (
-        type(tracker.reify()) == table_a_schema.index_spec.dtype.type
+        type(tracker.reify()) == table_a_schema.index_spec.dtype
     )  # should be same as index spec dtype
     assert tracker.query(2) == 0
 

@@ -26,7 +26,7 @@ def base_schemas():
     fk_to_a = ForeignKeySchema(
         name="link_to_a",
         target_table=table_a_schema,
-        adjacency_conf=AdjacencyListConf(track_counts=True),
+        adjacency_conf=AdjacencyListConf(track_counts=True, counts_dtype=np.uint8),
     )
 
     table_b_schema = TableSchema(name="table_b", index_spec=idx_spec, cols=[fk_to_a])

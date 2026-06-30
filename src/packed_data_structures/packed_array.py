@@ -3,14 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, cast, override
 import numpy as np
-from numpy.typing import DTypeLike
 
 from packed_data_structures.edit_helpers import plan_bulk_edit
 
 from .dirty_tracking import DirtyTrackingArray, DirtyTimestampProvider
 
 
-class PackedArray[T: np.generic](
+class PackedArray[T: np.generic, T_shape: tuple[int, ...] = tuple[()]](
     np.lib.mixins.NDArrayOperatorsMixin, DirtyTimestampProvider
 ):
     """Base packed array class.
@@ -21,21 +20,21 @@ class PackedArray[T: np.generic](
     """
 
     resize_factor: int | float
-    dtype: T
+    dtype: type[T]
     empty_fill: int | float | np.generic = 0
     __array_priority__ = 1000
 
-    _data: PackedArrayBuffer[T]
+    _data: PackedArrayBuffer[T, tuple[*T_shape], tuple[int, *T_shape]]
     _cached_size: int = -1
-    _cached_view: DirtyTrackingArray[Any, T] | None = None
+    _cached_view: DirtyTrackingArray[tuple[int, *T_shape], T] | None = None
 
     def __init__(
         self,
         pre_allocated_capacity: int | tuple[int, ...],
-        dtype: DTypeLike,
+        dtype: type[T],
         empty_fill: Any = 0,
         resize_factor: int | float = 2,
-        element_shape: tuple[int, ...] | None = None,
+        element_shape: tuple[*T_shape] | None = None,
     ) -> None:
         """Initialize the PackedArray with specific capacity and data type.
 
@@ -77,7 +76,7 @@ class PackedArray[T: np.generic](
         if pre_allocated_capacity < 0:
             raise ValueError("pre_allocated_capacity must be non-negative.")
 
-        self.dtype = cast(T, dtype)
+        self.dtype = dtype
         self.resize_factor = resize_factor
         self.empty_fill = empty_fill
         self.element_shape = element_shape
@@ -85,7 +84,7 @@ class PackedArray[T: np.generic](
         self._data.arr[:] = empty_fill
 
     @property
-    def view(self) -> DirtyTrackingArray[Any, T]:
+    def view(self) -> DirtyTrackingArray[tuple[int, *T_shape], T]:
         if self._cached_view is None or self._cached_size != self._data.size:
             size = self._data.size
             new_view = self._data.arr[:size]
@@ -328,7 +327,11 @@ class PackedArray[T: np.generic](
 
 
 @dataclass(slots=True)
-class PackedArrayBuffer[T: np.generic]:
+class PackedArrayBuffer[
+    T: np.generic,
+    T_elem_shape: tuple[int, ...],
+    T_arr_shape: tuple[int, ...],
+]:
     """A container for the underlying numpy array memory.
 
     Tracks both the allocated capacity and the current size. Handles the
@@ -341,11 +344,11 @@ class PackedArrayBuffer[T: np.generic]:
     """
 
     capacity: int
-    dtype: DTypeLike
-    element_shape: tuple[int, ...] = field(default_factory=tuple)
+    dtype: type[T]
+    element_shape: T_elem_shape = field(default_factory=tuple)
 
     size: int = field(init=False)
-    arr: DirtyTrackingArray[Any, T] = field(init=False)
+    arr: DirtyTrackingArray[T_arr_shape, T] = field(init=False)
 
     def __post_init__(self) -> None:
         self.size = 0
