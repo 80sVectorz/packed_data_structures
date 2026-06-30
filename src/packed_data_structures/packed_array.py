@@ -5,11 +5,9 @@ from typing import Any, cast, override
 from collections.abc import Sequence
 import numpy as np
 
-from packed_data_structures.edit_helpers import plan_bulk_edit
+from packed_data_structures.edit_helpers import plan_bulk_edit, T_IndexArray
 
 from .dirty_tracking import DirtyTrackingArray, DirtyTimestampProvider
-
-type T_IndexArray = np.ndarray[tuple[int], np.dtype[np.integer]]
 
 
 class PackedArray[T: np.generic, *T_shape](

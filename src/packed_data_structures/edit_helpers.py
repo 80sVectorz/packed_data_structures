@@ -9,7 +9,8 @@ from packed_data_structures.nb_hash_set import (
     int_set_contains_same_dtype,
 )
 
-from packed_data_structures.packed_array import T_IndexArray
+
+type T_IndexArray = np.ndarray[tuple[int], np.dtype[np.integer]]
 
 
 def plan_bulk_edit(
