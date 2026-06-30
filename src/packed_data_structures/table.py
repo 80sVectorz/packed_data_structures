@@ -1,7 +1,7 @@
 from __future__ import annotations
 from packed_data_structures import DataColSchema
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, cast, overload, Unpack
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 from collections.abc import Iterable, Sequence
 from collections.abc import Iterator
 
@@ -107,7 +107,9 @@ class PackedArrayTable[T_idx: np.generic](
         return self._len
 
     @overload
-    def __getitem__(self, key: str) -> SchemaAccessor[ColSchemaLike, np.generic]: ...
+    def __getitem__(
+        self, key: str
+    ) -> SchemaAccessor[ColSchemaLike[np.generic], np.generic]: ...
 
     @overload
     def __getitem__[T: np.generic, T_counts: np.generic](
@@ -115,9 +117,9 @@ class PackedArrayTable[T_idx: np.generic](
     ) -> ForeignKeySchemaAccessor[T, T_idx, T_counts]: ...
 
     @overload
-    def __getitem__[T: np.generic, T_shape: tuple[int, ...]](
-        self, key: DataColSchema[T, T_shape]
-    ) -> SchemaAccessor[DataColSchema[T, T_shape], T, T_shape]: ...
+    def __getitem__[T: np.generic, *T_shape](
+        self, key: DataColSchema[T, *T_shape]
+    ) -> SchemaAccessor[DataColSchema[T, *T_shape], T, *T_shape]: ...
 
     @overload
     def __getitem__[T: np.generic](
@@ -411,7 +413,7 @@ class PackedArrayTable[T_idx: np.generic](
 class SchemaAccessor[
     T_s: ColSchemaLike,
     T: np.generic,
-    T_shape: tuple[int, ...] = tuple[int],
+    *T_shape,
 ]:
     """Provides a typed view into a specific column of a table.
 
@@ -429,7 +431,7 @@ class SchemaAccessor[
     col_id: int
 
     @property
-    def view(self) -> np.ndarray[tuple[int, Unpack[T_shape]], np.dtype[T]]:
+    def view(self) -> np.ndarray[tuple[int, *T_shape], np.dtype[T]]:
         """Access the raw numpy view of the packed array.
 
         This provides direct, zero-overhead access to the contiguous array
@@ -440,7 +442,7 @@ class SchemaAccessor[
             A numpy array view of the active elements.
         """
         return cast(
-            np.ndarray[tuple[int, Unpack[T_shape]], np.dtype[T]],
+            np.ndarray[tuple[int, *T_shape], np.dtype[T]],
             self.table.arrays[self.col_id].view,
         )
 
@@ -448,7 +450,7 @@ class SchemaAccessor[
         return self.view.__getitem__(*args)
 
     @property
-    def arr(self) -> PackedArray[T, T_shape]:
+    def arr(self) -> PackedArray[T, *T_shape]:
         return self.table.arrays[self.col_id]
 
 

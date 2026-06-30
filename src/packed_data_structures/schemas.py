@@ -91,9 +91,7 @@ class ColSchemaLike[T: np.generic](ABC):
 
 
 @dataclass(eq=False)
-class DataColSchema[T: np.generic, T_shape: tuple[int, ...] = tuple[()]](
-    ColSchemaLike[T]
-):
+class DataColSchema[T: np.generic, *T_shape](ColSchemaLike[T]):
     """Schema for a standard data column containing raw values.
 
     Defines the data type, default values, and shape of elements within
@@ -109,7 +107,7 @@ class DataColSchema[T: np.generic, T_shape: tuple[int, ...] = tuple[()]](
     name: str
     dtype: type[T]
     default: Any | tuple[Any, ...] = 0
-    shape: T_shape = field(default_factory=tuple)
+    shape: tuple[*T_shape] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         if len(self.shape) != 0 and not isinstance(self.default, tuple):

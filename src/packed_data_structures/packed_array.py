@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, cast, override
+from collections.abc import Sequence
 import numpy as np
 
 from packed_data_structures.edit_helpers import plan_bulk_edit
@@ -9,7 +10,7 @@ from packed_data_structures.edit_helpers import plan_bulk_edit
 from .dirty_tracking import DirtyTrackingArray, DirtyTimestampProvider
 
 
-class PackedArray[T: np.generic, T_shape: tuple[int, ...] = tuple[()]](
+class PackedArray[T: np.generic, *T_shape](
     np.lib.mixins.NDArrayOperatorsMixin, DirtyTimestampProvider
 ):
     """Base packed array class.
@@ -254,8 +255,10 @@ class PackedArray[T: np.generic, T_shape: tuple[int, ...] = tuple[()]](
     def bulk_edit(
         self,
         *,
-        additions: list[T] | None = None,
-        removals: list[int] | np.ndarray[Any, np.dtype[np.integer]] | None = None,
+        additions: Sequence[T]
+        | np.ndarray[tuple[int, *T_shape], np.dtype[T]]
+        | None = None,
+        removals: Sequence[int] | np.ndarray[Any, np.dtype[np.integer]] | None = None,
     ) -> tuple[np.ndarray, tuple[np.ndarray, np.ndarray]]:
         """Applies multiple append and remove operations in one optimized procedure.
 
@@ -263,8 +266,8 @@ class PackedArray[T: np.generic, T_shape: tuple[int, ...] = tuple[()]](
         Meaning that new values replace removal targets to avoid unnecessary relocations.
 
         Args:
-            additions (list[T] | None, optional): List of entries to append.
-            removals (list[int] | None, optional): List of indices to remove.
+            additions: List of entries to append.
+            removals: List of indices to remove.
 
         Returns:
             Returns a list of appended value destinations, and a tuple of relocated indices.
