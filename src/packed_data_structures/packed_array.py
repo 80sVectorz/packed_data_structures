@@ -167,17 +167,17 @@ class PackedArray[T: np.generic, T_shape: tuple[int, ...] = tuple[()]](
         kwargs = {k: unwrap(v) for k, v in (kwargs or {}).items()}
         return func(*args, **kwargs)
 
-    def append(self, element: T) -> None:
+    def append(self, element: T | int | float) -> None:
         capacity = self._data.capacity
         size = self._data.size
         if size >= capacity:
             if self.resize_factor != 0:
-                new_t_size = max(
+                new_capacity = max(
                     round(capacity * self.resize_factor),
                     capacity + 1,
                     size + 1,
                 )
-                self._data.resize(new_t_size)
+                self._data.resize(new_capacity)
                 self._data.arr[size:] = self.empty_fill
             else:
                 raise Exception("Append failed: max capacity reached")

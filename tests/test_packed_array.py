@@ -12,7 +12,7 @@ def test_buffer_initialization():
 
 
 def test_buffer_initialization_with_shape():
-    buf = PackedArrayBuffer(capacity=5, dtype=np.int32, shape=(3,))
+    buf = PackedArrayBuffer(capacity=5, dtype=np.int32, element_shape=(3,))
     assert buf.capacity == 5
     assert buf.arr.shape == (5, 3)
 
