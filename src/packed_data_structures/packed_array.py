@@ -9,6 +9,8 @@ from packed_data_structures.edit_helpers import plan_bulk_edit
 
 from .dirty_tracking import DirtyTrackingArray, DirtyTimestampProvider
 
+type T_IndexArray = np.ndarray[tuple[int], np.dtype[np.integer]]
+
 
 class PackedArray[T: np.generic, *T_shape](
     np.lib.mixins.NDArrayOperatorsMixin, DirtyTimestampProvider
@@ -258,8 +260,8 @@ class PackedArray[T: np.generic, *T_shape](
         additions: Sequence[T]
         | np.ndarray[tuple[int, *T_shape], np.dtype[T]]
         | None = None,
-        removals: Sequence[int] | np.ndarray[Any, np.dtype[np.integer]] | None = None,
-    ) -> tuple[np.ndarray, tuple[np.ndarray, np.ndarray]]:
+        removals: Sequence[int] | T_IndexArray | None = None,
+    ) -> tuple[T_IndexArray, tuple[T_IndexArray, T_IndexArray]]:
         """Applies multiple append and remove operations in one optimized procedure.
 
         Uses first-come-first-serve based addition and removal pair merging.
