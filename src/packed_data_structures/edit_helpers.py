@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING
+from __future__ import annotations
+
 from collections.abc import Sequence
 import numpy as np
 import numba as nb
@@ -8,8 +9,7 @@ from packed_data_structures.nb_hash_set import (
     int_set_contains_same_dtype,
 )
 
-if TYPE_CHECKING:
-    from packed_data_structures.packed_array import T_IndexArray
+from packed_data_structures.packed_array import T_IndexArray
 
 
 def plan_bulk_edit(
