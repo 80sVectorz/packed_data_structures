@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, cast, override
+from collections.abc import Sequence
 import numpy as np
-from numpy.typing import DTypeLike
 
-from packed_data_structures.edit_helpers import plan_bulk_edit
+from packed_data_structures.edit_helpers import plan_bulk_edit, T_IndexArray
 
 from .dirty_tracking import DirtyTrackingArray, DirtyTimestampProvider
 
 
-class PackedArray[T: np.generic](
+class PackedArray[T: np.generic, *T_shape](
     np.lib.mixins.NDArrayOperatorsMixin, DirtyTimestampProvider
 ):
     """Base packed array class.
@@ -21,21 +21,21 @@ class PackedArray[T: np.generic](
     """
 
     resize_factor: int | float
-    dtype: T
+    dtype: type[T]
     empty_fill: int | float | np.generic = 0
     __array_priority__ = 1000
 
-    _data: PackedArrayBuffer[T]
+    _data: PackedArrayBuffer[T, tuple[*T_shape], tuple[int, *T_shape]]
     _cached_size: int = -1
-    _cached_view: DirtyTrackingArray[Any, T] | None = None
+    _cached_view: DirtyTrackingArray[tuple[int, *T_shape], T] | None = None
 
     def __init__(
         self,
         pre_allocated_capacity: int | tuple[int, ...],
-        dtype: DTypeLike,
+        dtype: type[T],
         empty_fill: Any = 0,
         resize_factor: int | float = 2,
-        element_shape: tuple[int, ...] | None = None,
+        element_shape: tuple[*T_shape] | None = None,
     ) -> None:
         """Initialize the PackedArray with specific capacity and data type.
 
@@ -77,7 +77,7 @@ class PackedArray[T: np.generic](
         if pre_allocated_capacity < 0:
             raise ValueError("pre_allocated_capacity must be non-negative.")
 
-        self.dtype = cast(T, dtype)
+        self.dtype = dtype
         self.resize_factor = resize_factor
         self.empty_fill = empty_fill
         self.element_shape = element_shape
@@ -85,7 +85,7 @@ class PackedArray[T: np.generic](
         self._data.arr[:] = empty_fill
 
     @property
-    def view(self) -> DirtyTrackingArray[Any, T]:
+    def view(self) -> DirtyTrackingArray[tuple[int, *T_shape], T]:
         if self._cached_view is None or self._cached_size != self._data.size:
             size = self._data.size
             new_view = self._data.arr[:size]
@@ -168,17 +168,17 @@ class PackedArray[T: np.generic](
         kwargs = {k: unwrap(v) for k, v in (kwargs or {}).items()}
         return func(*args, **kwargs)
 
-    def append(self, element: T) -> None:
+    def append(self, element: T | int | float) -> None:
         capacity = self._data.capacity
         size = self._data.size
         if size >= capacity:
             if self.resize_factor != 0:
-                new_t_size = max(
+                new_capacity = max(
                     round(capacity * self.resize_factor),
                     capacity + 1,
                     size + 1,
                 )
-                self._data.resize(new_t_size)
+                self._data.resize(new_capacity)
                 self._data.arr[size:] = self.empty_fill
             else:
                 raise Exception("Append failed: max capacity reached")
@@ -255,17 +255,19 @@ class PackedArray[T: np.generic](
     def bulk_edit(
         self,
         *,
-        additions: list[T] | None = None,
-        removals: list[int] | np.ndarray[Any, np.dtype[np.integer]] | None = None,
-    ) -> tuple[np.ndarray, tuple[np.ndarray, np.ndarray]]:
+        additions: Sequence[T]
+        | np.ndarray[tuple[int, *T_shape], np.dtype[T]]
+        | None = None,
+        removals: Sequence[int] | T_IndexArray | None = None,
+    ) -> tuple[T_IndexArray, tuple[T_IndexArray, T_IndexArray]]:
         """Applies multiple append and remove operations in one optimized procedure.
 
         Uses first-come-first-serve based addition and removal pair merging.
         Meaning that new values replace removal targets to avoid unnecessary relocations.
 
         Args:
-            additions (list[T] | None, optional): List of entries to append.
-            removals (list[int] | None, optional): List of indices to remove.
+            additions: List of entries to append.
+            removals: List of indices to remove.
 
         Returns:
             Returns a list of appended value destinations, and a tuple of relocated indices.
@@ -328,7 +330,11 @@ class PackedArray[T: np.generic](
 
 
 @dataclass(slots=True)
-class PackedArrayBuffer[T: np.generic]:
+class PackedArrayBuffer[
+    T: np.generic,
+    T_elem_shape: tuple[int, ...],
+    T_arr_shape: tuple[int, ...],
+]:
     """A container for the underlying numpy array memory.
 
     Tracks both the allocated capacity and the current size. Handles the
@@ -341,11 +347,11 @@ class PackedArrayBuffer[T: np.generic]:
     """
 
     capacity: int
-    dtype: DTypeLike
-    element_shape: tuple[int, ...] = field(default_factory=tuple)
+    dtype: type[T]
+    element_shape: T_elem_shape = field(default_factory=tuple)
 
     size: int = field(init=False)
-    arr: DirtyTrackingArray[Any, T] = field(init=False)
+    arr: DirtyTrackingArray[T_arr_shape, T] = field(init=False)
 
     def __post_init__(self) -> None:
         self.size = 0

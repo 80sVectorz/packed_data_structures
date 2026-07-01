@@ -72,7 +72,7 @@ class TimestampRef(DirtyTimestampProvider):
         return self.value
 
 
-class DirtyTrackingArray[T_s: tuple[Any, ...] | Any, T_dt: np.generic](
+class DirtyTrackingArray[T_s: tuple[int, ...], T_dt: np.generic](
     np.ndarray, DirtyTimestampProvider
 ):
     """A numpy array that updates a shared timestamp on every modification.
@@ -83,7 +83,7 @@ class DirtyTrackingArray[T_s: tuple[Any, ...] | Any, T_dt: np.generic](
 
     __slots__ = ("timestamp_ref",)
     timestamp_ref: TimestampRef
-    __array_priority__ = 1000  # type: ignore
+    __array_priority__ = 1000
 
     @property
     @override
@@ -103,13 +103,13 @@ class DirtyTrackingArray[T_s: tuple[Any, ...] | Any, T_dt: np.generic](
         """
         obj = np.asarray(input_array).view(cls)
         if timestamp_ref is not None:
-            obj.timestamp_ref = timestamp_ref
+            obj.timestamp_ref = timestamp_ref  # type: ignore
         else:
             if isinstance(input_array, DirtyTrackingArray):
-                obj.timestamp_ref = input_array.timestamp_ref.update()
+                obj.timestamp_ref = input_array.timestamp_ref.update()  # type: ignore
             else:
-                obj.timestamp_ref = TimestampRef(time_ns())
-        return obj
+                obj.timestamp_ref = TimestampRef(time_ns())  # type: ignore
+        return obj  # type: ignore
 
     def __array_finalize__(self, obj: Any) -> None:
         if obj is None:

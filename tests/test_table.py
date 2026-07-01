@@ -79,3 +79,37 @@ def test_normalize_records_col_major(empty_db, base_schemas):
     assert np.array_equal(records[0], [10.0, 20.0])
     # The default for missing columns is filled
     assert records[1].shape == (2, 3)  # position filled with defaults
+
+
+def test_normalize_records_col_major_exceptions(empty_db, base_schemas):
+    from packed_data_structures.schemas import DataColSchema
+
+    table_a_schema, _ = base_schemas
+    table_a = empty_db.get_table(table_a_schema)
+
+    col_weight = next(c for c in table_a_schema.cols if c.name == "weight")
+    col_pos = next(c for c in table_a_schema.cols if c.name == "position")
+
+    # Mock an invalid schema key
+    dummy_col = DataColSchema("dummy", np.float32)
+
+    # 1. KeyError from dict
+    with pytest.raises(
+        KeyError, match="Table 'table_a' does not contain the included column 'dummy'"
+    ):
+        table_a.normalize_records_col_major({dummy_col: [1.0]})
+
+    # 2. KeyError from sequence of tuples
+    with pytest.raises(
+        KeyError, match="Table 'table_a' does not contain the included column 'dummy'"
+    ):
+        table_a.normalize_records_col_major([(dummy_col, [1.0])])
+
+    # 3. ValueError from misaligned columns
+    with pytest.raises(ValueError, match="misaligned columns"):
+        table_a.normalize_records_col_major(
+            {
+                col_weight: [10.0, 20.0, 30.0],
+                col_pos: [[1, 2, 3], [4, 5, 6]],  # 3 items vs 2 items
+            }
+        )

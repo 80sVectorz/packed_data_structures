@@ -2,10 +2,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
-from numpy.typing import DTypeLike
 
 from packed_data_structures.packed_array import PackedArray
 
@@ -23,19 +22,19 @@ class IndexSpec[T: np.generic]:
         max_value: The maximum valid integer value for an index.
     """
 
-    dtype: np.dtype[T]
+    dtype: type[T]
     missing: int
     max_value: int
 
     @classmethod
-    def from_dtype(cls, dtype_like: DTypeLike) -> IndexSpec:
+    def from_dtype(cls, dtype: type[T]) -> IndexSpec:
         """Create an IndexSpec from a numpy data type.
 
         By standard convention, the maximum representable value of the given
         integer type is reserved as the missing/sentinel value.
 
         Args:
-            dtype_like: A numpy integer data type or equivalent.
+            dtype: A numpy integer data type.
 
         Returns:
             A new IndexSpec instance.
@@ -43,15 +42,12 @@ class IndexSpec[T: np.generic]:
         Raises:
             TypeError: If the provided dtype is not an integer type.
         """
-        dtype = np.dtype(dtype_like)
         if not np.issubdtype(dtype, np.integer):
             raise TypeError(f"Index dtype must be integer, got {dtype}")
 
-        info = np.iinfo(dtype)  # type: ignore
+        info = np.iinfo(dtype)
         # Standard convention: Max value is the sentinel
-        return cls(
-            dtype=cast(np.dtype[T], dtype), missing=info.max, max_value=info.max - 1
-        )
+        return cls(dtype=dtype, missing=info.max, max_value=info.max - 1)
 
     def new_array(self, size: int) -> np.ndarray[Any, np.dtype[T]]:
         """Helper to allocate raw numpy arrays with correct initialization."""
@@ -61,7 +57,7 @@ class IndexSpec[T: np.generic]:
 
 
 @dataclass(eq=False)
-class ColSchemaLike[T: np.generic]:
+class ColSchemaLike[T: np.generic](ABC):
     """Base class for all column schemas.
 
     Column schemas are treated as object-identity singletons (`id(self)`)
@@ -84,6 +80,7 @@ class ColSchemaLike[T: np.generic]:
         """
         self.parent_table = parent
 
+    @abstractmethod
     def init_array(self) -> PackedArray[T]: ...
 
     def __hash__(self) -> int:
@@ -94,7 +91,7 @@ class ColSchemaLike[T: np.generic]:
 
 
 @dataclass(eq=False)
-class DataColSchema[T: np.generic](ColSchemaLike[T]):
+class DataColSchema[T: np.generic, *T_shape](ColSchemaLike[T]):
     """Schema for a standard data column containing raw values.
 
     Defines the data type, default values, and shape of elements within
@@ -108,12 +105,11 @@ class DataColSchema[T: np.generic](ColSchemaLike[T]):
     """
 
     name: str
-    dtype: DTypeLike
+    dtype: type[T]
     default: Any | tuple[Any, ...] = 0
-    shape: tuple[int, ...] = ()
+    shape: tuple[*T_shape] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
-        self.shape = tuple(self.shape)
         if len(self.shape) != 0 and not isinstance(self.default, tuple):
             self.default = tuple(np.full(self.shape, self.default))
 
@@ -132,18 +128,16 @@ class DataColSchema[T: np.generic](ColSchemaLike[T]):
 
 
 @dataclass
-class AdjacencyListConf:
+class AdjacencyListConf[T_counts: np.generic]:
     """Config for adjacency list structure.
 
     Attributes:
         track_counts: If a counts column should be made.
-        counts_dtype: Dtype of the element count column.
-            If no dtype is provided the index dtype of the fk is used.
+        counts_dtype: Dtype of the element count column. Defaults to np.uint8
     """
 
     track_counts: bool = False
-    counts_dtype: None | DTypeLike = None
-    parent_fk: ForeignKeySchema = field(init=False)
+    counts_dtype: type[T_counts] | None = None
 
 
 class FksOnDeleteStyle(Enum):
@@ -158,7 +152,9 @@ class FksOnDeleteStyle(Enum):
 
 
 @dataclass(eq=False)
-class ForeignKeySchema[T: np.generic](ColSchemaLike[T]):
+class ForeignKeySchema[T: np.generic, T_parent: np.generic, T_counts: np.generic](
+    ColSchemaLike[T]
+):
     """Schema for a foreign key relationship linking to another table.
 
     When registered, this schema dynamically injects internal adjacency list
@@ -179,18 +175,19 @@ class ForeignKeySchema[T: np.generic](ColSchemaLike[T]):
     name: str
     target_table: TableSchema
     on_delete: FksOnDeleteStyle = FksOnDeleteStyle.CASCADE
-    adjacency_conf: AdjacencyListConf = field(default_factory=AdjacencyListConf)
+    adjacency_conf: AdjacencyListConf[T_counts] = field(
+        default_factory=AdjacencyListConf
+    )
 
-    adj_next: DataColSchema = field(init=False)
-    adj_prev: DataColSchema = field(init=False)
-    adj_head: DataColSchema = field(init=False)
-    adj_count: DataColSchema = field(init=False)
+    adj_next: DataColSchema[T_parent] = field(init=False)
+    adj_prev: DataColSchema[T_parent] = field(init=False)
+    adj_head: DataColSchema[T] = field(init=False)
+    adj_count: DataColSchema[T_counts] = field(init=False)
 
     def __post_init__(self):
-        self.adjacency_conf.parent_fk = self
         self.target_table.subscribe(self)
 
-    def set_parent(self, parent: TableSchema):
+    def set_parent(self, parent: TableSchema[T_parent]):
         """Bind this foreign key to a parent table and inject adjacency columns.
 
         This actively mutates both the parent and target table schemas by
@@ -227,9 +224,10 @@ class ForeignKeySchema[T: np.generic](ColSchemaLike[T]):
         parent.register_new_column(self.adj_prev)
 
         if self.adjacency_conf.track_counts:
+            assert self.adjacency_conf.counts_dtype is not None
             self.adj_count = DataColSchema(
                 f"_adj_count_{full_name}",
-                self.adjacency_conf.counts_dtype or parent.index_spec.dtype,
+                self.adjacency_conf.counts_dtype,
                 0,
             )
             target.register_new_column(self.adj_count)
@@ -247,11 +245,11 @@ class ForeignKeySchema[T: np.generic](ColSchemaLike[T]):
         )
 
 
-class SupportsGetTableSchema(ABC):
+class SupportsGetTableSchema[T_idx: np.generic](ABC):
     """Interface for objects that can provide a TableSchema."""
 
     @abstractmethod
-    def get_table_schema(self) -> TableSchema:
+    def get_table_schema(self) -> TableSchema[T_idx]:
         """Get the underlying TableSchema.
 
         Returns:
@@ -261,7 +259,7 @@ class SupportsGetTableSchema(ABC):
 
 
 @dataclass(slots=True)
-class TableSchema(SupportsGetTableSchema):
+class TableSchema[T_idx: np.generic](SupportsGetTableSchema):
     """Schema definition for a flat, column-oriented table.
 
     A TableSchema aggregates multiple `ColSchemaLike` definitions and
@@ -275,11 +273,13 @@ class TableSchema(SupportsGetTableSchema):
     """
 
     name: str
-    index_spec: IndexSpec
+    index_spec: IndexSpec[T_idx]
     cols: list[ColSchemaLike[Any]]
     pre_allocate: int = 0
 
-    subscribers: list[ForeignKeySchema] = field(init=False, default_factory=list)
+    subscribers: list[ForeignKeySchema[Any, T_idx, Any]] = field(
+        init=False, default_factory=list
+    )
     col_ids: dict[ColSchemaLike, int] = field(init=False, default_factory=dict)
     _finalized: bool = field(init=False, default=False)
 

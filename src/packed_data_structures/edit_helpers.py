@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Sequence
 import numpy as np
 import numba as nb
@@ -8,9 +10,12 @@ from packed_data_structures.nb_hash_set import (
 )
 
 
+type T_IndexArray = np.ndarray[tuple[int], np.dtype[np.integer]]
+
+
 def plan_bulk_edit(
-    current_size: int, n_additions: int, removals: Sequence[int] | np.ndarray | None
-) -> tuple[int, np.ndarray, tuple[np.ndarray, np.ndarray], np.ndarray]:
+    current_size: int, n_additions: int, removals: Sequence[int] | T_IndexArray | None
+) -> tuple[int, T_IndexArray, tuple[T_IndexArray, T_IndexArray], T_IndexArray]:
     """Calculates the most efficient destinations for additions and relocations for removals.
 
     Uses first-come-first-served based addition and removal pair merging.
@@ -87,7 +92,7 @@ def plan_bulk_edit(
     relocs_from = np.asarray(relocs_from)
     relocs_to = np.asarray(relocs_to)
 
-    return new_size, np.asarray(addition_dests), (relocs_from, relocs_to), removals_arr
+    return new_size, np.asarray(addition_dests), (relocs_from, relocs_to), removals_arr  # type: ignore
 
 
 @nb.njit(cache=True, inline="always")

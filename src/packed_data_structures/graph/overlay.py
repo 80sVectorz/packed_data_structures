@@ -38,7 +38,7 @@ class GraphFeature:
         return None
 
 
-class BaseGraphLayer(SupportsGetTableSchema):
+class BaseGraphLayer[T_idx: np.generic](SupportsGetTableSchema[T_idx]):
     """Base class representing a logical layer in a graph (Nodes or Edges).
 
     A layer maps to a single underlying PackedArrayTable but manages its
@@ -75,7 +75,9 @@ class BaseGraphLayer(SupportsGetTableSchema):
     @overload
     def add_entry(self, **kwargs) -> int: ...
 
-    def add_entry(self, data: dict[ColSchemaLike, Any] | None = None, **kwargs) -> int:
+    def add_entry(
+        self, data: dict[ColSchemaLike, Any] | None = None, **kwargs: Any
+    ) -> int:
         """Add a single row to the layer's underlying table.
 
         Allows specifying values via schema objects in `data` or via string keys as keyword arguments.
@@ -90,31 +92,36 @@ class BaseGraphLayer(SupportsGetTableSchema):
         Raises:
             RuntimeError: If the database has not been initialized yet.
         """
-        record = {}
-        if data:
+        if data is not None:
+            record: dict[ColSchemaLike, Any] = {}
             record.update(data)
-        record.update(kwargs)
+        else:
+            record: dict[str, Any] = {}
+            record.update(kwargs)
 
-        if not self.overlay._db:
+        if not self.overlay.db:
             raise RuntimeError("DB not initialized")
 
-        return self.overlay._db.get_table(self.name).add_entry(record)
+        return self.overlay.db.get_table(self.name).add_entry(record)
 
-    def get_table_schema(self) -> TableSchema:
+    def get_table_schema(self) -> TableSchema[T_idx]:
         return self.schema
 
 
-class NodeLayer(BaseGraphLayer):
+class NodeLayer[T_idx: np.generic](BaseGraphLayer[T_idx]):
     """A layer representing a set of distinct vertices (nodes) in the graph."""
 
-    def __init__(self, name: str, overlay: GraphOverlay):
+    def __init__(self, name: str, overlay: GraphOverlay[T_idx]):
         super().__init__(name, overlay)
         # Immediate Schema Instantiation
         spec = IndexSpec.from_dtype(overlay.index_dtype)
         self.schema = TableSchema(name, spec, [])
 
 
-class EdgeLayer[T: np.generic](BaseGraphLayer):
+class EdgeLayer[
+    T_idx: np.generic,
+    T_counts: np.generic,
+](BaseGraphLayer[T_idx]):
     """A layer representing a set of directed connections (edges) between nodes.
 
     Automatically injects Foreign Key schemas for `src` and `tgt` pointers,
@@ -125,28 +132,34 @@ class EdgeLayer[T: np.generic](BaseGraphLayer):
         tgt: The injected ForeignKeySchema pointing to the target NodeLayer.
     """
 
-    src: ForeignKeySchema[T]
-    tgt: ForeignKeySchema[T]
+    src: ForeignKeySchema[T_idx, T_idx, T_counts]
+    tgt: ForeignKeySchema[T_idx, T_idx, T_counts]
+
+    track_counts: bool
+    counts_dtype: type[T_counts]
 
     def __init__(
-        self, name: str, overlay: GraphOverlay, source: NodeLayer, target: NodeLayer
+        self,
+        name: str,
+        overlay: GraphOverlay,
+        source: NodeLayer,
+        target: NodeLayer,
+        track_counts: bool = False,
+        counts_dtype: type[T_counts] | None = None,
     ):
+        if track_counts and counts_dtype is None:
+            raise ValueError("counts_dtype must be specified when track_counts is True")
+
         super().__init__(name, overlay)
-        spec = IndexSpec.from_dtype(overlay.index_dtype)
+        spec: IndexSpec[T_idx] = IndexSpec.from_dtype(overlay.index_dtype)
         self.schema = TableSchema(name, spec, [])
+
+        adj_conf = AdjacencyListConf(track_counts, counts_dtype)
 
         # Immediate FK Instantiation
         # We bind to the schemas of the source/target layers immediately.
-        self.src = ForeignKeySchema(
-            "src",
-            source.schema,
-            adjacency_conf=AdjacencyListConf(True, source.schema.index_spec.dtype),
-        )
-        self.tgt = ForeignKeySchema(
-            "tgt",
-            target.schema,
-            adjacency_conf=AdjacencyListConf(True, target.schema.index_spec.dtype),
-        )
+        self.src = ForeignKeySchema("src", source.schema, adjacency_conf=adj_conf)
+        self.tgt = ForeignKeySchema("tgt", target.schema, adjacency_conf=adj_conf)
 
         self.schema.register_new_column(self.src)
         self.schema.register_new_column(self.tgt)
@@ -155,10 +168,10 @@ class EdgeLayer[T: np.generic](BaseGraphLayer):
         self, node_idx: int, kind: Literal["incoming", "outgoing", "both"] = "both"
     ) -> list[int]:
         """Returns a list of edge indices in this layer connected to the given node."""
-        if not self.overlay._db:
+        if not self.overlay.db:
             raise RuntimeError("DB not initialized")
 
-        db = self.overlay._db
+        db = self.overlay.db
         edges_tbl = db.get_table(self.name)
         missing = edges_tbl.schema.index_spec.missing
         indices = set()
@@ -190,28 +203,38 @@ class GraphOverlay[T_idx: np.generic](DbOverlay):
 
     Groups tables into NodeLayers and EdgeLayers, automating the setup of
     foreign keys and adjacency lists. Acts as a high-level factory for building
-    complex graph databases via DoD arrays.
+    complex graph schemas.
     """
 
-    _db: PackedArrayDB | None
-    index_dtype: np.dtype[T_idx]
+    db: PackedArrayDB | None
+    index_dtype: type[T_idx]
 
-    def __init__(self, index_dtype: T_idx = np.uint32):
+    def __init__(self, index_dtype: type[T_idx]):
         self.index_dtype = index_dtype
         self.layers: dict[str, BaseGraphLayer] = {}
-        self._db = None
+        self.db = None
 
-    def add_node_layer(self, name: str, features=None) -> NodeLayer:
+    def add_node_layer(self, name: str, features=None) -> NodeLayer[T_idx]:
         layer = NodeLayer(name, self)
         self.layers[name] = layer
         for f in features or []:
             layer.add_feature(f)
         return layer
 
-    def add_edge_layer(
-        self, name: str, source: NodeLayer, target: NodeLayer, features=None
-    ) -> EdgeLayer[T_idx]:
-        layer = EdgeLayer(name, self, source, target)
+    def add_edge_layer[
+        T_counts: np.generic,
+        T_src: NodeLayer,
+        T_tgt: NodeLayer,
+    ](
+        self,
+        name: str,
+        source: T_src,
+        target: T_tgt,
+        features=None,
+        track_counts: bool = False,
+        counts_dtype: type[T_counts] | None = None,
+    ) -> EdgeLayer[T_idx, T_counts, T_src, T_tgt]:
+        layer = EdgeLayer(name, self, source, target, track_counts, counts_dtype)
         self.layers[name] = layer
         for f in features or []:
             layer.add_feature(f)
@@ -237,4 +260,4 @@ class GraphOverlay[T_idx: np.generic](DbOverlay):
         return hooks
 
     def bind(self, db):
-        self._db = db
+        self.db = db
