@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from packed_data_structures.packed_array import PackedArray, PackedArrayBuffer
+from packed_data_structures.arrays import PackedArray, PackedArrayBuffer
 
 
 def test_buffer_initialization():

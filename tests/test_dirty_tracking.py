@@ -1,8 +1,7 @@
-import pytest
 import numpy as np
 import time
 
-from packed_data_structures.dirty_tracking import (
+from packed_data_structures.arrays.dirty_tracking import (
     DirtyTrackingArray,
     TimestampRef,
     ProvidesDirtyTimestamp,

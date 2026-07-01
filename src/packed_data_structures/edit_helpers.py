@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Any
 
 from collections.abc import Sequence
 import numpy as np
@@ -10,7 +11,7 @@ from packed_data_structures.nb_hash_set import (
 )
 
 
-type T_IndexArray = np.ndarray[tuple[int], np.dtype[np.integer]]
+type T_IndexArray = np.ndarray[tuple[int], np.dtype[np.integer[Any]]]
 
 
 def plan_bulk_edit(

@@ -130,7 +130,7 @@ def oracle_resolve_array(
 
     missing = oracle.missing_index_sentinel
 
-    for i in nb.prange(len(values)):
+    for i in nb.prange(len(values)):  # ty:ignore[not-iterable]
         v = values[i]
         if v == missing:
             out[i] = missing

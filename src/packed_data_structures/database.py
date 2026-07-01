@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import overload
+from typing import overload, Any
 import numpy as np
 
 
-from packed_data_structures.dirty_tracking import (
+from packed_data_structures.arrays.dirty_tracking import (
     DirtyTimestampProvider,
     ProvidesDirtyTimestamp,
 )
@@ -67,11 +67,11 @@ class PackedArrayDB(ProvidesDirtyTimestamp):
     def get_table(self, key: str) -> PackedArrayTable: ...
 
     @overload
-    def get_table[T_idx: np.generic](
+    def get_table[T_idx: np.integer[Any]](
         self, key: SupportsGetTableSchema[T_idx]
     ) -> PackedArrayTable[T_idx]: ...
 
-    def get_table[T_idx: np.generic](
+    def get_table[T_idx: np.integer[Any]](
         self, key: SupportsGetTableSchema[T_idx] | str
     ) -> PackedArrayTable[T_idx]:
         if isinstance(key, SupportsGetTableSchema):

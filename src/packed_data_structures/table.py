@@ -1,4 +1,8 @@
 from __future__ import annotations
+from packed_data_structures.schemas.object_col import ObjectColSchema
+from packed_data_structures.schema_accessors.object_col_accessor import (
+    ObjectColSchemaAccessor,
+)
 from packed_data_structures import DataColSchema
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
@@ -12,22 +16,20 @@ if TYPE_CHECKING:
     from packed_data_structures.transaction_context import TransactionContext
     from packed_data_structures.database import PackedArrayDB
 
-from packed_data_structures.dirty_tracking import (
+from packed_data_structures.arrays.dirty_tracking import (
     DirtyTimestampProvider,
     ProvidesDirtyTimestamp,
 )
 
-from packed_data_structures.packed_array import PackedArray
+from packed_data_structures.arrays import PackedArray
 from packed_data_structures.schemas import (
     ColSchemaLike,
     ForeignKeySchema,
     SupportsGetTableSchema,
     TableSchema,
 )
-from packed_data_structures.nb_adjacency_list_helpers import (
-    nb_count_adj_elements,
-    nb_get_adj_elements,
-)
+
+from .schema_accessors import SchemaAccessor, ForeignKeySchemaAccessor
 
 type RecordsColMajor = (
     dict[ColSchemaLike, Sequence[Any]] | Sequence[tuple[ColSchemaLike, Sequence[Any]]]
@@ -50,7 +52,7 @@ type NormalizedUpdatesColMajor = tuple[tuple[int, np.ndarray, np.ndarray], ...]
 
 
 @dataclass(slots=True)
-class PackedArrayTable[T_idx: np.generic](
+class PackedArrayTable[T_idx: np.integer[Any]](
     ProvidesDirtyTimestamp, SupportsGetTableSchema
 ):
     """A tabular data structure backed by columnar PackedArrays.
@@ -112,14 +114,21 @@ class PackedArrayTable[T_idx: np.generic](
     ) -> SchemaAccessor[ColSchemaLike[np.generic], np.generic]: ...
 
     @overload
-    def __getitem__[T: np.generic, T_counts: np.generic](
+    def __getitem__[T: np.integer[Any], T_counts: np.integer[Any]](
         self, key: ForeignKeySchema[T, T_idx, T_counts]
     ) -> ForeignKeySchemaAccessor[T, T_idx, T_counts]: ...
 
     @overload
     def __getitem__[T: np.generic, *T_shape](
-        self, key: DataColSchema[T, *T_shape]
-    ) -> SchemaAccessor[DataColSchema[T, *T_shape], T, *T_shape]: ...
+        self,
+        key: ObjectColSchema[T],
+    ) -> ObjectColSchemaAccessor[T]: ...
+
+    @overload
+    def __getitem__[T: np.generic, *T_shape](
+        self,
+        key: DataColSchema[T, *T_shape],  # ty:ignore[invalid-type-arguments]
+    ) -> SchemaAccessor[DataColSchema[T, *T_shape], T, *T_shape]: ...  # ty:ignore[invalid-type-arguments]
 
     @overload
     def __getitem__[T: np.generic](
@@ -150,10 +159,13 @@ class PackedArrayTable[T_idx: np.generic](
                 f"Table '{self.schema.name}' does not contain column '{key.name}'"
             )
 
-        if isinstance(key, ForeignKeySchema):
-            return ForeignKeySchemaAccessor(self, key, col_id)
-        else:
-            return SchemaAccessor(self, key, col_id)
+        match key:
+            case ForeignKeySchema():
+                return ForeignKeySchemaAccessor(self, key, col_id)
+            case ObjectColSchema():
+                return ObjectColSchemaAccessor(self, key, col_id)
+
+        return SchemaAccessor(self, key, col_id)
 
     def get_table_schema(self) -> TableSchema:
         """Get the schema definition of this table.
@@ -304,7 +316,9 @@ class PackedArrayTable[T_idx: np.generic](
         return ctx
 
     def update_entries(
-        self, updates: UpdatesColMajor, shape: Literal["col_major"] = "col_major"
+        self,
+        updates: UpdatesColMajor,
+        shape: Literal["col_major", "row_major"] = "col_major",
     ) -> None:
         """Updates existing entries.
 
@@ -407,112 +421,3 @@ class PackedArrayTable[T_idx: np.generic](
     # --- dirty tracking ---
     def _collect_dirty_sources(self) -> tuple[DirtyTimestampProvider, ...]:
         return self.arrays
-
-
-@dataclass(slots=True)
-class SchemaAccessor[
-    T_s: ColSchemaLike,
-    T: np.generic,
-    *T_shape,
-]:
-    """Provides a typed view into a specific column of a table.
-
-    Returned when indexing a table with a DataColSchema. Provides
-    direct interaction with the underlying numpy arrays.
-
-    Attributes:
-        table: The table containing the data.
-        schema: The schema definition for this column.
-        col_id: The internal array index for this column.
-    """
-
-    table: PackedArrayTable
-    schema: T_s
-    col_id: int
-
-    @property
-    def view(self) -> np.ndarray[tuple[int, *T_shape], np.dtype[T]]:
-        """Access the raw numpy view of the packed array.
-
-        This provides direct, zero-overhead access to the contiguous array
-        backing this column, suitable for passing to Numba or vectorized
-        Numpy operations.
-
-        Returns:
-            A numpy array view of the active elements.
-        """
-        return cast(
-            np.ndarray[tuple[int, *T_shape], np.dtype[T]],
-            self.table.arrays[self.col_id].view,
-        )
-
-    def __getitem__(self, *args):
-        return self.view.__getitem__(*args)
-
-    @property
-    def arr(self) -> PackedArray[T, *T_shape]:
-        return self.table.arrays[self.col_id]
-
-
-@dataclass(slots=True)
-class ForeignKeySchemaAccessor[
-    T: np.generic,
-    T_parent: np.generic,
-    T_counts: np.generic,
-](SchemaAccessor[ForeignKeySchema[T, T_parent, T_counts], T]):
-    """Provides a typed view into a foreign key column.
-
-    Returned when indexing a table with a ForeignKeySchema. In addition to
-    raw array access, it provides methods for querying adjacency lists.
-
-    Attributes:
-        table: The table containing the foreign key.
-        schema: The foreign key schema definition.
-        col_id: The internal array index for this column.
-        target_table: The table this foreign key points to.
-    """
-
-    table: PackedArrayTable
-    schema: ForeignKeySchema[T, T_parent, T_counts]
-    col_id: int
-
-    target_table: PackedArrayTable[T] = field(init=False)
-
-    def __post_init__(self):
-        self.target_table = self.table.db.get_table(self.schema.target_table)
-
-    def get_referencing_indices(
-        self, head_indices: Iterable[int]
-    ) -> tuple[tuple[int, ...], ...]:
-        """Fetch the list of row indices that reference given targets.
-
-        Uses the dynamically injected adjacency list columns to traverse
-        relationships backwards in O(K) time, where K is the number of incident edges.
-
-        Args:
-            head_indices: The target row indices to query incoming links for.
-
-        Returns:
-            A tuple containing a tuple of referring row indices for each target.
-        """
-        head_indices = tuple(head_indices)
-
-        vw_adj_head = self.target_table[self.schema.adj_head].view
-        vw_adj_next = self.table[self.schema.adj_next].view
-
-        index_spec = self.table.schema.index_spec
-        if not self.schema.adjacency_conf.track_counts:
-            counts = np.zeros_like(head_indices, index_spec.dtype)
-            nb_count_adj_elements(
-                head_indices, vw_adj_head, vw_adj_next, index_spec.missing, out=counts
-            )
-
-        else:
-            vw_adj_count = self.target_table[self.schema.adj_count].view
-            counts = vw_adj_count[list(head_indices)]
-
-        indices = tuple(np.zeros(cnt, index_spec.dtype) for cnt in counts)
-
-        nb_get_adj_elements(head_indices, counts, vw_adj_head, vw_adj_next, out=indices)
-
-        return tuple(tuple(v.astype(int)) for v in indices)
