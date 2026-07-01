@@ -1,7 +1,11 @@
 from __future__ import annotations
 from packed_data_structures.schemas.object_col import ObjectColSchema
+from packed_data_structures.schemas.string_col import StringColSchema
 from packed_data_structures.schema_accessors.object_col_accessor import (
     ObjectColSchemaAccessor,
+)
+from packed_data_structures.schema_accessors.string_col_accessor import (
+    StringColSchemaAccessor,
 )
 from packed_data_structures import DataColSchema
 from dataclasses import dataclass, field
@@ -125,6 +129,12 @@ class PackedArrayTable[T_idx: np.integer[Any]](
     ) -> ObjectColSchemaAccessor[T]: ...
 
     @overload
+    def __getitem__(
+        self,
+        key: StringColSchema,
+    ) -> StringColSchemaAccessor: ...
+
+    @overload
     def __getitem__[T: np.generic, *T_shape](
         self,
         key: DataColSchema[T, *T_shape],  # ty:ignore[invalid-type-arguments]
@@ -164,6 +174,8 @@ class PackedArrayTable[T_idx: np.integer[Any]](
                 return ForeignKeySchemaAccessor(self, key, col_id)
             case ObjectColSchema():
                 return ObjectColSchemaAccessor(self, key, col_id)
+            case StringColSchema():
+                return StringColSchemaAccessor(self, key, col_id)
 
         return SchemaAccessor(self, key, col_id)
 
