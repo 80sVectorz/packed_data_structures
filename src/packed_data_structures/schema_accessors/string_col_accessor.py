@@ -5,7 +5,9 @@ from .schema_accessor import SchemaAccessor
 from dataclasses import dataclass
 import numpy as np
 
+
 @dataclass(slots=True)
 class StringColSchemaAccessor(SchemaAccessor[StringColSchema, np.str_]):
     """Provides a typed view into a fixed-length string column."""
+
     pass

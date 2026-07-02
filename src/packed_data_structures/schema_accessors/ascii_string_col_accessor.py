@@ -5,7 +5,9 @@ from .schema_accessor import SchemaAccessor
 from dataclasses import dataclass
 import numpy as np
 
+
 @dataclass(slots=True)
 class AsciiStringColSchemaAccessor(SchemaAccessor[AsciiStringColSchema, np.bytes_]):
     """Provides a typed view into a fixed-length ASCII byte-string column."""
+
     pass

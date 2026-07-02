@@ -3,6 +3,7 @@ from packed_data_structures.schemas.object_col import ObjectColSchema
 from packed_data_structures.arrays import PackedObjectArray
 
 from typing import Any, cast, overload, TYPE_CHECKING
+
 if TYPE_CHECKING:
     from packed_data_structures import PackedArrayTable
 from .schema_accessor import SchemaAccessor
