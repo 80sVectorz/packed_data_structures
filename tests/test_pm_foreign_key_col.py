@@ -105,7 +105,6 @@ def test_pm_fk_update_type(pm_populated_db, pm_base_schemas):
     # B[1] gained C[0], should have C[4] and C[0] now
     assert table_b[adj_count_b][1] == 2
     assert table_b[adj_head_b][1] in (0, 4)
-    missing = pm_fk.keys_idx_spec.missing
 
     # C[0] and C[4] should be linked
     assert table_c[pm_fk.adj_next][0] == 4 or table_c[pm_fk.adj_prev][0] == 4
@@ -114,7 +113,6 @@ def test_pm_fk_update_type(pm_populated_db, pm_base_schemas):
 def test_pm_fk_target_deletion_cascade(pm_populated_db, pm_base_schemas):
     table_a_schema, table_b_schema, table_c_schema = pm_base_schemas
     table_a = pm_populated_db.get_table(table_a_schema)
-    table_b = pm_populated_db.get_table(table_b_schema)
     table_c = pm_populated_db.get_table(table_c_schema)
     pm_fk = next(c for c in table_c_schema.cols if c.name == "link_to_a_or_b")
 

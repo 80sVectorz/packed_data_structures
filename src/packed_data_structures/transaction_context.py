@@ -563,7 +563,16 @@ class TransactionContext:
     def register_additions_row_major(
         self, table: TableSchema, new_records: tuple[tuple[Any, ...], ...]
     ) -> range:
-        additions_col_maj = tuple(np.array(a) for a in zip(*new_records, strict=True))
+        if not new_records:
+            additions_col_maj = tuple(
+                np.empty(0, dtype=self.db.get_table(table.name).arrays[i].dtype)
+                for i in range(len(table.cols))
+            )
+        else:
+            additions_col_maj = tuple(
+                np.array(a, dtype=self.db.get_table(table.name).arrays[i].dtype)
+                for i, a in enumerate(zip(*new_records, strict=True))
+            )
         return self.register_additions_col_major(table, additions_col_maj)
 
     def register_deletions(self, table: TableSchema, indices: Iterable[int]):
@@ -741,7 +750,7 @@ class TransactionContext:
         arr_addition_dests = np.asarray(addition_dests, dtype=idx_dtype)
 
         return RemapOracle(
-            set_null_unlinks_sorted=np.empty(0),
+            set_null_unlinks_sorted=np.empty(0, dtype=idx_dtype),
             deletions_sorted=arr_deletions,
             moves_from=arr_moves_from,
             moves_to=arr_moves_to,
@@ -782,13 +791,14 @@ class TransactionContext:
 
     def _get_identity_oracle(self, table: str) -> RemapOracle:
         table_obj = self.db.get_table(table)
+        idx_dtype = table_obj.schema.index_spec.dtype
         return RemapOracle(
-            set_null_unlinks_sorted=np.empty(0),
-            deletions_sorted=np.empty(0),
-            moves_from=np.empty(0),
-            moves_to=np.empty(0),
-            moves_to_sorted=np.empty(0),
-            addition_destinations=np.empty(0),
+            set_null_unlinks_sorted=np.empty(0, dtype=idx_dtype),
+            deletions_sorted=np.empty(0, dtype=idx_dtype),
+            moves_from=np.empty(0, dtype=idx_dtype),
+            moves_to=np.empty(0, dtype=idx_dtype),
+            moves_to_sorted=np.empty(0, dtype=idx_dtype),
+            addition_destinations=np.empty(0, dtype=idx_dtype),
             staged_indices_start=len(table_obj),
             new_size=len(table_obj),
             missing_index_sentinel=table_obj.schema.index_spec.missing,

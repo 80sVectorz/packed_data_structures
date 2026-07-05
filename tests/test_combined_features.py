@@ -1,7 +1,6 @@
 import pytest
 from unittest.mock import patch
 import packed_data_structures.transaction_context as tc
-import packed_data_structures.edit_helpers as eh
 import numpy as np
 from packed_data_structures.database import PackedArrayDB
 from packed_data_structures.schemas import (
@@ -12,6 +11,7 @@ from packed_data_structures.schemas import (
     AdjacencyListConf,
     PolymorphicForeignKeySchema,
 )
+
 
 @pytest.fixture(params=["jit", "no_jit"], autouse=True)
 def jit_mode(request):
