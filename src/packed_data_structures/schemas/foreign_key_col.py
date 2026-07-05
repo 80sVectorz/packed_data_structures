@@ -7,7 +7,12 @@ import numpy as np
 
 from packed_data_structures.arrays import PackedArray
 from .col_schema_like import ColSchemaLike
-from .data_col import DataColSchema
+from .adjacency_columns import (
+    AdjHeadIdxColSchema,
+    AdjNextIdxColSchema,
+    AdjPrevIdxColSchema,
+    AdjCountColSchema,
+)
 
 if TYPE_CHECKING:
     from .table import TableSchema
@@ -43,16 +48,25 @@ class ForeignKeySchema[
     T_parent: np.integer[Any],
     T_counts: np.integer[Any],
 ](ColSchemaLike[T]):
-    """Schema for a foreign key relationship linking to another table.
+    """Schema for a column of foreign keys that all point into one specific table.
 
-    When registered, this schema dynamically injects internal adjacency list
-    columns (`adj_head`, `adj_next`, `adj_prev`, and optionally `adj_count`)
-    into both the source and target tables.
+    When registered, this schema dynamically injects internal adjacency list columns:
+    - `adj_head` (in target table)
+    - `adj_next` (in source table)
+    - `adj_prev` (in source table)
+    - `adj_count` (optional, in target table)
+
+    NOTE: The true column names are more verbose
+
+    Type Parameters:
+        T: The index dtype of the target table.
+        T_parent: The index dtype of the parent table. And by extension the `adj_next` and `adj_prev` columns.
+        T_counts: The dtype of the counts column (if applicable).
 
     Attributes:
-        name: The string identifier for the foreign key.
-        target_table: The TableSchema of the table this key points to.
-        on_delete: The policy to apply when the referenced row is deleted.
+        name: The string identifier for the column.
+        target_table: The TableSchema of the table the keys to.
+        on_delete: The policy to apply when something tries to delte a row referenced by this column.
         adjacency_conf: Configuration for the injected adjacency list columns.
         adj_next: The injected next-pointer column in the parent table.
         adj_prev: The injected previous-pointer column in the parent table.
@@ -67,22 +81,22 @@ class ForeignKeySchema[
         default_factory=AdjacencyListConf
     )
 
-    adj_next: DataColSchema[T_parent] = field(init=False)
-    adj_prev: DataColSchema[T_parent] = field(init=False)
-    adj_head: DataColSchema[T] = field(init=False)
-    adj_count: DataColSchema[T_counts] = field(init=False)
+    adj_next: AdjNextIdxColSchema[T_parent] = field(init=False)
+    adj_prev: AdjPrevIdxColSchema[T_parent] = field(init=False)
+    adj_head: AdjHeadIdxColSchema[T] = field(init=False)
+    adj_count: AdjCountColSchema[T_counts] = field(init=False)
 
     def __post_init__(self):
         self.target_table.subscribe(self)
 
     def set_parent(self, parent: TableSchema[T_parent]):
-        """Bind this foreign key to a parent table and inject adjacency columns.
+        """Bind this foreign key column to a parent table and inject adjacency columns.
 
         This actively mutates both the parent and target table schemas by
         registering the hidden adjacency list management columns.
 
         Args:
-            parent: The TableSchema that will own this foreign key.
+            parent: The TableSchema that will own this foreign key column.
         """
         super().set_parent(parent)
 
@@ -91,21 +105,21 @@ class ForeignKeySchema[
 
         full_name = f"{parent.name}_{self.name}"
 
-        self.adj_head = DataColSchema(
+        self.adj_head = AdjHeadIdxColSchema(
             f"_adj_head_{full_name}",
             parent.index_spec.dtype,
             parent.index_spec.missing,
-        )
-        self.adj_next = DataColSchema(
+        ).set_parent_col(self)
+        self.adj_next = AdjNextIdxColSchema(
             f"_adj_next_{full_name}",
             parent.index_spec.dtype,
             parent.index_spec.missing,
-        )
-        self.adj_prev = DataColSchema(
+        ).set_parent_col(self)
+        self.adj_prev = AdjPrevIdxColSchema(
             f"_adj_prev_{full_name}",
             parent.index_spec.dtype,
             parent.index_spec.missing,
-        )
+        ).set_parent_col(self)
 
         target.register_new_column(self.adj_head)
         parent.register_new_column(self.adj_next)
@@ -113,11 +127,13 @@ class ForeignKeySchema[
 
         if self.adjacency_conf.track_counts:
             assert self.adjacency_conf.counts_dtype is not None
-            self.adj_count = DataColSchema(
+
+            self.adj_count = AdjCountColSchema(
                 f"_adj_count_{full_name}",
                 self.adjacency_conf.counts_dtype,
                 0,
-            )
+            ).set_parent_col(self)
+
             target.register_new_column(self.adj_count)
 
     def __hash__(self) -> int:

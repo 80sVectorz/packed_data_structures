@@ -1,18 +1,19 @@
 from __future__ import annotations
+from packed_data_structures.schemas.injected_logic_columns import PmFkTypeIdColSchema
 from typing import Literal
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, NamedTuple, cast, overload
+from typing import TYPE_CHECKING, Any, cast, overload
 
 import numpy as np
-import numba as nb
 
 from packed_data_structures.edit_helpers import (
     interleave_existing_rows,
     patch_relocated_adjacency_and_heads,
     patch_unlinked_adjacency_and_heads,
     interleave_new_rows,
+    interleave_new_rows_non_contiguous,
     plan_bulk_edit,
     fix_keys_broken_by_moved_targets,
 )
@@ -23,6 +24,7 @@ from packed_data_structures.schemas import (
     ForeignKeySchema,
     SupportsGetTableSchema,
     TableSchema,
+    PolymorphicForeignKeySchema,
 )
 from packed_data_structures.table import NormalizedUpdatesColMajor, PackedArrayTable
 from packed_data_structures.remap_oracle import RemapOracle, oracle_resolve_array
@@ -64,10 +66,6 @@ class DeletionTraceback:
 
 if TYPE_CHECKING:
     from packed_data_structures.database import PackedArrayDB
-    from packed_data_structures.table import (
-        NormalizedRecordRowMajor,
-        NormalizedRecordsColMajor,
-    )
 
 
 @dataclass(slots=True)
@@ -100,6 +98,15 @@ class TopologyScratchpad:
     head_cursor: int = 0
     count_cursor: int = 0
 
+    # Metadata for applying the patch
+    target_table_schema: TableSchema | None = None
+    fk_col_schema: ColSchemaLike | None = None
+    adj_next_schema: ColSchemaLike | None = None
+    adj_prev_schema: ColSchemaLike | None = None
+    adj_head_schema: ColSchemaLike | None = None
+    adj_count_schema: ColSchemaLike | None = None
+    track_counts: bool = False
+
     @classmethod
     def allocate(
         cls,
@@ -108,7 +115,9 @@ class TopologyScratchpad:
         n_relinks: int,
         n_moves: int,
         fk_nulls: np.ndarray,
-        fk_col: ForeignKeySchema,
+        target_idx_dtype: type[np.integer[Any]],
+        parent_idx_dtype: type[np.integer[Any]],
+        track_counts: bool,
     ):
         """Allocates worst-case buffers for a topology update phase."""
         # Example scenarios:
@@ -133,12 +142,7 @@ class TopologyScratchpad:
 
         capacity = n_unlinks + 2 * n_relinks + n_additions + n_moves
 
-        target_idx_dtype = fk_col.target_table.index_spec.dtype
-        parent_idx_dtype = fk_col.parent_table.index_spec.dtype
-
-        adj_conf = fk_col.adjacency_conf
-
-        count_capacity = adj_conf.track_counts * capacity
+        count_capacity = track_counts * capacity
 
         return cls(
             next_indices=np.empty(capacity, dtype=parent_idx_dtype),
@@ -150,6 +154,7 @@ class TopologyScratchpad:
             count_indices=np.empty(count_capacity, dtype=target_idx_dtype),
             count_deltas=np.empty(count_capacity, dtype=np.int64),
             nullify_indices=fk_nulls.astype(parent_idx_dtype),
+            track_counts=track_counts,
         )
 
     def translate_in_place(
@@ -225,36 +230,38 @@ class TopologyScratchpad:
         self,
         source_table: PackedArrayTable,
         target_table: PackedArrayTable,
-        fk_col: ForeignKeySchema,
     ):
         """Applies sparse updates to the physical arrays."""
         if self.next_cursor > 0:
-            source_table[fk_col.adj_next].view[
+            assert self.adj_next_schema is not None
+            source_table[self.adj_next_schema].view[
                 self.next_indices[: self.next_cursor]
             ] = self.next_values[: self.next_cursor]
 
         if self.prev_cursor > 0:
-            source_table[fk_col.adj_prev].view[
+            assert self.adj_prev_schema is not None
+            source_table[self.adj_prev_schema].view[
                 self.prev_indices[: self.prev_cursor]
             ] = self.prev_values[: self.prev_cursor]
 
         if self.head_cursor > 0:
-            target_table[fk_col.adj_head].view[
+            assert self.adj_head_schema is not None
+            target_table[self.adj_head_schema].view[
                 self.head_indices[: self.head_cursor]
             ] = self.head_values[: self.head_cursor]
 
-        if self.count_cursor > 0 and fk_col.adjacency_conf.track_counts:
+        if self.count_cursor > 0 and self.track_counts:
+            assert self.adj_count_schema is not None
             # Atomic add handles multiple children affecting the same parent count
             np.add.at(
-                target_table[fk_col.adj_count].view,
+                target_table[self.adj_count_schema].view,
                 self.count_indices[: self.count_cursor],
                 self.count_deltas[: self.count_cursor],
             )
 
         if len(self.nullify_indices) > 0:
-            source_table[fk_col].view[self.nullify_indices] = (
-                source_table.schema.index_spec.missing
-            )
+            assert self.fk_col_schema is not None
+            source_table[self.fk_col_schema].view[self.nullify_indices] = ()
 
 
 @dataclass(slots=True)
@@ -299,6 +306,14 @@ class TransactionContext:
         init=False, default_factory=lambda: defaultdict(lambda: defaultdict(dict))
     )
     """Stores FK topology changes: `TableName -> [ ColName -> [ RowIdx -> NewTargetID ] ]`"""
+    pm_fk_target_updates: defaultdict[str, defaultdict[str, dict[int, int]]] = field(
+        init=False, default_factory=lambda: defaultdict(lambda: defaultdict(dict))
+    )
+    """Stores PM FK target changes: `TableName -> [ ColName -> [ RowIdx -> NewTargetID ] ]`"""
+    pm_fk_type_id_updates: defaultdict[str, defaultdict[str, dict[int, int]]] = field(
+        init=False, default_factory=lambda: defaultdict(lambda: defaultdict(dict))
+    )
+    """Stores PM FK target table (type_id) changes: `TableName -> [ ColName -> [ RowIdx -> NewTargetTypeID ] ]`"""
 
     _staged_counters: dict[str, int] = field(init=False)
     _staged_starts: dict[str, int] = field(init=False)
@@ -403,7 +418,7 @@ class TransactionContext:
         """Registers bulk updates."""
         tbl_name = table.name
         deleted_set = self.deletions[tbl_name]
-        staged_start = self._staged_starts[tbl_name]
+        staging_start = self._staged_starts[tbl_name]
 
         # Pre-validate all updates before applying partial changes
         for col_idx, indices, _ in updates:
@@ -411,9 +426,9 @@ class TransactionContext:
             col_name = col_obj.name
 
             # Check for overlap with new additions (Staged IDs)
-            if np.max(indices) >= staged_start:
+            if np.max(indices) >= staging_start:
                 raise UpdateStagedRowException(
-                    message=f"Staged row(s) in update indices for '{tbl_name}'.'{col_name}':\n{indices[indices >= staged_start]}"
+                    message=f"Staged row(s) in update indices for '{tbl_name}'.'{col_name}':\n{indices[indices >= staging_start]}"
                 )
 
             # Check for overlap with deletions
@@ -431,7 +446,7 @@ class TransactionContext:
             # Check for overlap with queued updates (Physical IDs)
             pending_col_updates = self.updates[tbl_name].get(col_name, {})
             for idx in indices:
-                if idx < staged_start and idx in pending_col_updates:
+                if idx < staging_start and idx in pending_col_updates:
                     raise UpdateQueuedEditException(
                         message=f"Row {idx} in '{tbl_name}'.'{col_name}' already has a staged update.",
                         problematic_index=idx,
@@ -441,23 +456,53 @@ class TransactionContext:
 
         tbl_obj = self.db.get_table(table)
 
-        # Apply Updates
+        # Stage all physical updates
         for col_idx, indices, values in updates:
             col_schema = table.cols[col_idx]
             col_name = col_schema.name
             is_fk = isinstance(col_schema, ForeignKeySchema)
+            is_pm_fk = isinstance(col_schema, PolymorphicForeignKeySchema)
+            is_pm_fk_type_id = isinstance(col_schema, PmFkTypeIdColSchema)
             true_updates = np.nonzero(values != tbl_obj[col_schema].view[indices])[0]
+            true_indices = indices[true_updates]
+
+            if is_pm_fk:
+                current_type_ids = self.db.get_table(table)[
+                    col_schema.type_id_col
+                ].view[true_indices]
+
+            if is_pm_fk_type_id:
+                current_pm_fk_targets = self.db.get_table(table)[
+                    col_schema.parent_col
+                ].view[true_indices]
+
+            if is_pm_fk or is_pm_fk_type_id:
+                pm_fk_col = col_schema if is_pm_fk else col_schema.parent_col
+                pm_fk_type_id_updates = self.pm_fk_type_id_updates[tbl_name][
+                    pm_fk_col.name
+                ]
+                pm_fk_target_updates = self.pm_fk_target_updates[tbl_name][
+                    pm_fk_col.name
+                ]
 
             for i in range(len(true_updates)):
                 idx = int(indices[true_updates][i])
                 val = values[true_updates][i]
 
-                # Queue Physical Update
+                # Queue physical update
                 self.updates[tbl_name][col_name][idx] = val
 
+                # Queue topology change
                 if is_fk:
-                    # Queue Topology Change
                     self.fk_updates[tbl_name][col_name][idx] = val
+                elif is_pm_fk:
+                    pm_fk_target_updates[idx] = val
+                    if idx not in pm_fk_type_id_updates:
+                        pm_fk_type_id_updates[idx] = current_type_ids[i]
+                elif is_pm_fk_type_id:
+                    pm_fk_type_id_updates[idx] = val
+                    if idx not in pm_fk_target_updates:
+                        pm_fk_target_updates[idx] = current_pm_fk_targets[i]
 
     def register_additions_col_major(
         self, table: TableSchema, new_records: tuple[np.ndarray, ...]
@@ -469,19 +514,43 @@ class TransactionContext:
 
         for i, col in enumerate(table.cols):
             if isinstance(col, ForeignKeySchema):
-                if col.target_table.name in self.deletions:
-                    targets = new_records[i]
-                    target_deletions = self.deletions[col.target_table.name]
+                if col.target_table.name not in self.deletions:
+                    continue
+                targets = new_records[i]
+                target_deletions = self.deletions[col.target_table.name]
 
-                    if not target_deletions.isdisjoint(targets):
+                if not target_deletions.isdisjoint(targets):
+                    raise VoidReferenceException(
+                        message=f"Received keys for '{col.name}' that target deleted rows"
+                    )
+            elif isinstance(col, PolymorphicForeignKeySchema):
+                type_id_data = new_records[table.col_ids[col.type_id_col]]
+                targets = new_records[i]
+
+                for type_id, target_table in enumerate(col.target_tables):
+                    if target_table.name not in self.deletions:
+                        continue
+
+                    mask = type_id_data == type_id
+                    relevant_targets = targets[mask]
+
+                    if not self.deletions[target_table.name].isdisjoint(
+                        relevant_targets
+                    ):
                         raise VoidReferenceException(
-                            message=f"Received keys for '{col.name}' that target deleted rows"
+                            message=f"Received keys for '{col.name}' that target deleted rows in {target_table.name}"
                         )
 
         for i, col in enumerate(table.cols):
             additions[i].append(new_records[i])
             if isinstance(col, ForeignKeySchema):
                 self.new_fk_claims[col.target_table.name].update(new_records[i])
+            elif isinstance(col, PolymorphicForeignKeySchema):
+                type_id_data = new_records[table.col_ids[col.type_id_col]]
+                targets = new_records[i]
+                for type_id, target_table in enumerate(col.target_tables):
+                    relevant_targets = targets[type_id_data == type_id]
+                    self.new_fk_claims[target_table.name].update(relevant_targets)
 
         current_counter = self._staged_counters[table.name]
         n_additions = len(new_records[0]) if new_records else 0
@@ -568,9 +637,15 @@ class TransactionContext:
             subscriber_tbl_name = subscriber.parent_table.name
             subscriber_tbl = self.db.get_table(subscriber_tbl_name)
 
-            connected_indices = subscriber_tbl[subscriber].get_referencing_indices(
-                indices
-            )
+            if isinstance(subscriber, PolymorphicForeignKeySchema):
+                type_id = subscriber.type_id_mapping[table]
+                connected_indices = subscriber_tbl[subscriber].get_referencing_indices(
+                    type_id, indices
+                )
+            else:
+                connected_indices = subscriber_tbl[subscriber].get_referencing_indices(
+                    indices
+                )
 
             flat_connected_indices = set().union(*connected_indices)
 
@@ -680,7 +755,7 @@ class TransactionContext:
 
     def _create_fk_column_oracle(
         self,
-        col: ForeignKeySchema,
+        col: ForeignKeySchema | PolymorphicForeignKeySchema,
         table_oracles: dict[str, RemapOracle] | None = None,
     ) -> RemapOracle:
         table = col.parent_table.name
@@ -720,136 +795,125 @@ class TransactionContext:
             missing_index_sentinel=table_obj.schema.index_spec.missing,
         )
 
-    def _compute_topology_patches(
-        self, dirty_table: str, oracles: dict[str, RemapOracle]
-    ) -> list[TopologyScratchpad]:
-        table_obj = self.db.get_table(dirty_table)
-        patches = []
+    def _process_topology_patches_for_subgraph(
+        self,
+        dirty_table: str,
+        source_tbl: PackedArrayTable[np.integer[Any]],
+        target_tbl: PackedArrayTable[np.integer[Any]],
+        fk: ForeignKeySchema | PolymorphicForeignKeySchema,
+        source_oracle: RemapOracle,
+        target_oracle: RemapOracle,
+        unlinks_to_process: np.ndarray,
+        global_unlinks: np.ndarray,
+        relink_map: dict[int, int],
+        additions: np.ndarray,
+        additions_staged_indices: np.ndarray | None,
+        active_moves_from: np.ndarray,
+        active_moves_to: np.ndarray,
+        fk_nulls: np.ndarray,
+        fk_arr: np.ndarray,
+        adj_next: np.ndarray,
+        adj_prev: np.ndarray,
+        target_adj_head: np.ndarray,
+        target_adj_head_schema: ColSchemaLike,
+        target_adj_count_schema: ColSchemaLike | None,
+        missing_idx_src: int,
+        missing_idx_tgt: int,
+    ) -> tuple[TopologyScratchpad, np.ndarray, np.ndarray, np.ndarray]:
+        n_additions = len(additions)
 
-        fk_col_ids = table_obj.foreign_key_columns
+        newly_claimed_indices, newly_claimed_counts = np.unique(
+            additions[additions != missing_idx_tgt], return_counts=True
+        )
 
-        for fk_id in fk_col_ids:
-            fk = cast(ForeignKeySchema, table_obj.schema.cols[fk_id])
-            source_tbl = table_obj
-            target_tbl = self.db.get_table(fk.target_table)
-
-            missing_idx_src = source_tbl.schema.index_spec.missing
-            missing_idx_tgt = target_tbl.schema.index_spec.missing
-
-            source_oracle = self._create_fk_column_oracle(fk, oracles)
-
-            target_oracle = (
-                oracles[target_tbl.name]
-                if target_tbl.name in oracles
-                else self._get_identity_oracle(target_tbl.name)
+        head_ignore_indices = newly_claimed_indices
+        if len(target_oracle.deletions_sorted) > 0:
+            head_ignore_indices = np.union1d(
+                head_ignore_indices, target_oracle.deletions_sorted
             )
 
-            update_map = self.fk_updates.get(dirty_table, {}).get(fk.name, {})
-
-            rows_to_unlink = np.union1d(
-                source_oracle.deletions_sorted,
-                source_oracle.set_null_unlinks_sorted,
-            ).astype(source_tbl.schema.index_spec.dtype)
-
-            if update_map:
-                updates_sorted = np.sort(
-                    np.fromiter(
-                        update_map.keys(),
-                        dtype=source_tbl.schema.index_spec.dtype,
-                    )
-                )
-                rows_to_unlink = np.union1d(rows_to_unlink, updates_sorted)
-
-            # Identify moves for rows that are NOT being unlinked/updated.
-            # If a row is in rows_to_unlink, it is leaving its current chain,
-            # so we must NOT patch its neighbors to point to its new physical location.
-            if len(source_oracle.moves_from) > 0 and len(rows_to_unlink) > 0:
-                # Both arrays are sorted, so we can use isin efficiently
-                keep_mask = ~np.isin(source_oracle.moves_from, rows_to_unlink)
-                active_moves_from = source_oracle.moves_from[keep_mask]
-                active_moves_to = source_oracle.moves_to[keep_mask]
-            else:
-                active_moves_from = source_oracle.moves_from
-                active_moves_to = source_oracle.moves_to
-
-            additions = (
-                self.additions[dirty_table][fk_id][0]
-                if dirty_table in self.additions
-                else np.empty(0, dtype=fk.target_table.index_spec.dtype)
+        upd_claims = None
+        upd_counts = None
+        if relink_map:
+            updated_targets = np.fromiter(
+                relink_map.values(), dtype=target_tbl.schema.index_spec.dtype
             )
-            n_additions = len(additions)
-
-            newly_claimed_indices, newly_claimed_counts = np.unique(
-                additions[additions != missing_idx_tgt], return_counts=True
+            updated_targets_resolved = oracle_resolve_array(
+                updated_targets, target_oracle
             )
 
-            head_ignore_indices = newly_claimed_indices
-            if len(target_oracle.deletions_sorted) > 0:
-                head_ignore_indices = np.union1d(
-                    head_ignore_indices, target_oracle.deletions_sorted
-                )
-
-            # Handle Updates claiming new heads
-            upd_claims = None
-            upd_counts = None
-            if update_map:
-                updated_targets = np.fromiter(
-                    update_map.values(), dtype=fk.target_table.index_spec.dtype
-                )
-                updated_targets_resolved = oracle_resolve_array(
-                    updated_targets, target_oracle
-                )
-
-                upd_claims, upd_counts = np.unique(
-                    updated_targets_resolved[
-                        updated_targets_resolved != missing_idx_tgt
-                    ],
-                    return_counts=True,
-                )
-                head_ignore_indices = np.union1d(head_ignore_indices, upd_claims)
-
-            # Allocate Scratchpad
-            # We only pass source_oracle.set_null_unlinks_sorted as indices to physically nullify.
-            scratch_pad = TopologyScratchpad.allocate(
-                len(rows_to_unlink),
-                n_additions,
-                len(update_map),
-                len(active_moves_from),
-                source_oracle.set_null_unlinks_sorted,
-                fk,
+            upd_claims, upd_counts = np.unique(
+                updated_targets_resolved[updated_targets_resolved != missing_idx_tgt],
+                return_counts=True,
             )
+            head_ignore_indices = np.union1d(head_ignore_indices, upd_claims)
 
-            sp_next_indices = scratch_pad.next_indices
-            sp_next_values = scratch_pad.next_values
+        scratch_pad = TopologyScratchpad.allocate(
+            len(unlinks_to_process),
+            n_additions,
+            len(relink_map),
+            len(active_moves_from),
+            fk_nulls,
+            target_tbl.schema.index_spec.dtype,
+            source_tbl.schema.index_spec.dtype,
+            fk.adjacency_conf.track_counts,
+        )
 
-            sp_prev_indices = scratch_pad.prev_indices
-            sp_prev_values = scratch_pad.prev_values
+        scratch_pad.target_table_schema = target_tbl.schema
+        scratch_pad.fk_col_schema = fk
+        scratch_pad.adj_next_schema = fk.adj_next
+        scratch_pad.adj_prev_schema = fk.adj_prev
+        scratch_pad.adj_head_schema = target_adj_head_schema
+        scratch_pad.adj_count_schema = target_adj_count_schema
 
-            sp_head_indices = scratch_pad.head_indices
-            sp_head_values = scratch_pad.head_values
+        sp_next_indices = scratch_pad.next_indices
+        sp_next_values = scratch_pad.next_values
 
-            sp_next_cursor = scratch_pad.next_cursor
-            sp_prev_cursor = scratch_pad.prev_cursor
-            sp_head_cursor = scratch_pad.head_cursor
+        sp_prev_indices = scratch_pad.prev_indices
+        sp_prev_values = scratch_pad.prev_values
 
-            fk_arr = source_tbl[fk].view
-            adj_next = source_tbl[fk.adj_next].view
-            adj_prev = source_tbl[fk.adj_prev].view
-            adj_head = target_tbl[fk.adj_head].view
+        sp_head_indices = scratch_pad.head_indices
+        sp_head_values = scratch_pad.head_values
 
+        (sp_next_cursor, sp_prev_cursor, sp_head_cursor) = (
+            scratch_pad.next_cursor,
+            scratch_pad.prev_cursor,
+            scratch_pad.head_cursor,
+        ) = patch_unlinked_adjacency_and_heads(
+            missing_val_src=missing_idx_src,
+            missing_val_tgt=missing_idx_tgt,
+            unlinked_indices=unlinks_to_process,
+            head_ignore_indices=head_ignore_indices,
+            parent_fk=fk_arr,
+            adj_next=adj_next,
+            adj_prev=adj_prev,
+            target_adj_head=target_adj_head,
+            out_next_idx=sp_next_indices,
+            out_next_val=sp_next_values,
+            n_cursor=scratch_pad.next_cursor,
+            out_prev_idx=sp_prev_indices,
+            out_prev_val=sp_prev_values,
+            p_cursor=scratch_pad.prev_cursor,
+            out_head_idx=sp_head_indices,
+            out_head_val=sp_head_values,
+            h_cursor=scratch_pad.head_cursor,
+        )
+
+        if len(active_moves_from):
             (sp_next_cursor, sp_prev_cursor, sp_head_cursor) = (
                 scratch_pad.next_cursor,
                 scratch_pad.prev_cursor,
                 scratch_pad.head_cursor,
-            ) = patch_unlinked_adjacency_and_heads(
+            ) = patch_relocated_adjacency_and_heads(
                 missing_val_src=missing_idx_src,
                 missing_val_tgt=missing_idx_tgt,
-                unlinked_indices=rows_to_unlink,
                 head_ignore_indices=head_ignore_indices,
-                parent_fk=fk_arr,
+                moves_from=active_moves_from,
+                moves_to=active_moves_to,
+                src_fk=fk_arr,
                 adj_next=adj_next,
                 adj_prev=adj_prev,
-                target_adj_head=adj_head,
+                target_adj_head=target_adj_head,
                 out_next_idx=sp_next_indices,
                 out_next_val=sp_next_values,
                 n_cursor=sp_next_cursor,
@@ -861,21 +925,60 @@ class TransactionContext:
                 h_cursor=sp_head_cursor,
             )
 
-            if len(active_moves_from):
+        if len(scratch_pad.count_indices):
+            cnt_idxs = fk_arr[unlinks_to_process]
+            cnt_idxs = cnt_idxs[cnt_idxs != missing_idx_tgt]
+            cnt_deltas = np.full(len(cnt_idxs), -1, dtype=np.int64)
+
+            index_dtype = source_tbl.schema.index_spec.dtype
+            indices_list = [
+                cnt_idxs.astype(index_dtype),
+                newly_claimed_indices.astype(index_dtype),
+            ]
+            deltas_list = [
+                cnt_deltas.astype(index_dtype),
+                newly_claimed_counts.astype(index_dtype),
+            ]
+
+            if upd_claims is not None:
+                indices_list.append(upd_claims)
+                assert upd_counts is not None
+                deltas_list.append(upd_counts)
+
+            scratch_pad.count_indices = np.concatenate(indices_list)
+            scratch_pad.count_deltas = np.concatenate(deltas_list)
+
+            scratch_pad.count_cursor = len(scratch_pad.count_indices)
+
+        if len(relink_map):
+            u_rows = np.fromiter(
+                relink_map.keys(), dtype=source_tbl.schema.index_spec.dtype
+            )
+            u_targets = np.fromiter(
+                relink_map.values(), dtype=target_tbl.schema.index_spec.dtype
+            )
+
+            # Resolve to check validity (to drop deleted rows), but do not pass the resolved
+            # indices to `interleave_existing_rows`. The `interleave_existing_rows` function
+            # writes patches directly to `TopologyScratchpad`, which are subject to `oracle_resolve`
+            # natively inside `TopologyScratchpad.translate_in_place()`.
+            # If we wrote resolved indices, they would be translated twice and become broken.
+            u_rows_res = oracle_resolve_array(u_rows, source_oracle)
+
+            valid = u_rows_res != missing_idx_src
+            if np.any(valid):
                 (sp_next_cursor, sp_prev_cursor, sp_head_cursor) = (
                     scratch_pad.next_cursor,
                     scratch_pad.prev_cursor,
                     scratch_pad.head_cursor,
-                ) = patch_relocated_adjacency_and_heads(
+                ) = interleave_existing_rows(
+                    row_indices=u_rows[valid],
+                    targets=u_targets[valid],
+                    current_heads=target_adj_head,
+                    adj_next=adj_next,
+                    unlinked_indices=global_unlinks,
                     missing_val_src=missing_idx_src,
                     missing_val_tgt=missing_idx_tgt,
-                    head_ignore_indices=head_ignore_indices,
-                    moves_from=active_moves_from,
-                    moves_to=active_moves_to,
-                    src_fk=fk_arr,
-                    adj_next=adj_next,
-                    adj_prev=adj_prev,
-                    target_adj_head=adj_head,
                     out_next_idx=sp_next_indices,
                     out_next_val=sp_next_values,
                     n_cursor=sp_next_cursor,
@@ -887,74 +990,12 @@ class TransactionContext:
                     h_cursor=sp_head_cursor,
                 )
 
-            if len(scratch_pad.count_indices):
-                cnt_idxs = fk_arr[rows_to_unlink]
-                cnt_idxs = cnt_idxs[cnt_idxs != missing_idx_tgt]
-                cnt_deltas = np.full(len(cnt_idxs), -1, dtype=np.int64)
+        if n_additions and len(additions) > 0:
+            targets = additions
 
-                # Combine decrements (cnt_idxs), new additions (newly_claimed),
-                # and updates/re-links (upd_claims).
+            curr_heads = target_adj_head
 
-                index_dtype = source_tbl.schema.index_spec.dtype
-                indices_list = [
-                    cnt_idxs.astype(index_dtype),
-                    newly_claimed_indices.astype(index_dtype),
-                ]
-                deltas_list = [
-                    cnt_deltas.astype(index_dtype),
-                    newly_claimed_counts.astype(index_dtype),
-                ]
-
-                if upd_claims is not None:
-                    indices_list.append(upd_claims)
-                    deltas_list.append(upd_counts)
-
-                scratch_pad.count_indices = np.concatenate(indices_list)
-                scratch_pad.count_deltas = np.concatenate(deltas_list)
-
-                scratch_pad.count_cursor = len(scratch_pad.count_indices)
-
-            if len(update_map):
-                u_rows = np.fromiter(
-                    update_map.keys(), dtype=source_tbl.schema.index_spec.dtype
-                )
-                u_targets = np.fromiter(
-                    update_map.values(), dtype=target_tbl.schema.index_spec.dtype
-                )
-
-                u_rows_res = oracle_resolve_array(u_rows, source_oracle)
-                u_targets_res = oracle_resolve_array(u_targets, target_oracle)
-
-                valid = u_rows_res != missing_idx_src
-                if np.any(valid):
-                    (sp_next_cursor, sp_prev_cursor, sp_head_cursor) = (
-                        scratch_pad.next_cursor,
-                        scratch_pad.prev_cursor,
-                        scratch_pad.head_cursor,
-                    ) = interleave_existing_rows(
-                        row_indices=u_rows_res[valid],
-                        targets=u_targets_res[valid],
-                        current_heads=target_tbl[fk.adj_head].view,
-                        adj_next=adj_next,
-                        unlinked_indices=rows_to_unlink,
-                        missing_val_src=missing_idx_src,
-                        missing_val_tgt=missing_idx_tgt,
-                        out_next_idx=sp_next_indices,
-                        out_next_val=sp_next_values,
-                        n_cursor=sp_next_cursor,
-                        out_prev_idx=sp_prev_indices,
-                        out_prev_val=sp_prev_values,
-                        p_cursor=sp_prev_cursor,
-                        out_head_idx=sp_head_indices,
-                        out_head_val=sp_head_values,
-                        h_cursor=sp_head_cursor,
-                    )
-
-            if n_additions and len(additions) > 0:
-                targets = cast(np.ndarray, additions)
-
-                curr_heads = target_tbl[fk.adj_head].view
-
+            if additions_staged_indices is None:
                 (_, _, sp_prev_cursor, sp_head_cursor) = (
                     new_nexts,
                     new_prevs,
@@ -968,7 +1009,29 @@ class TransactionContext:
                     targets=targets,
                     current_heads=curr_heads,
                     adj_next=adj_next,
-                    unlinked_indices=rows_to_unlink,
+                    unlinked_indices=global_unlinks,
+                    out_prev_idx=sp_prev_indices,
+                    out_prev_val=sp_prev_values,
+                    p_cursor=sp_prev_cursor,
+                    out_head_idx=sp_head_indices,
+                    out_head_val=sp_head_values,
+                    h_cursor=sp_head_cursor,
+                )
+            else:
+                (_, _, sp_prev_cursor, sp_head_cursor) = (
+                    new_nexts,
+                    new_prevs,
+                    scratch_pad.prev_cursor,
+                    scratch_pad.head_cursor,
+                ) = interleave_new_rows_non_contiguous(
+                    n_new=n_additions,
+                    staged_indices=additions_staged_indices,
+                    missing_val_src=missing_idx_src,
+                    missing_val_tgt=missing_idx_tgt,
+                    targets=targets,
+                    current_heads=curr_heads,
+                    adj_next=adj_next,
+                    unlinked_indices=global_unlinks,
                     out_prev_idx=sp_prev_indices,
                     out_prev_val=sp_prev_values,
                     p_cursor=sp_prev_cursor,
@@ -977,15 +1040,282 @@ class TransactionContext:
                     h_cursor=sp_head_cursor,
                 )
 
-                final_fk_values = oracle_resolve_array(targets, target_oracle)
-                oracle_resolve_array(new_nexts, source_oracle, inplace=True)
-                oracle_resolve_array(new_prevs, source_oracle, inplace=True)
-                self._patch_addition_buffers(
-                    dirty_table, fk, final_fk_values, new_nexts, new_prevs
+            final_fk_values = oracle_resolve_array(targets, target_oracle)
+            oracle_resolve_array(new_nexts, source_oracle, inplace=True)
+            oracle_resolve_array(new_prevs, source_oracle, inplace=True)
+        else:
+            final_fk_values = np.empty(0, dtype=target_tbl.schema.index_spec.dtype)
+            new_nexts = np.empty(0, dtype=source_tbl.schema.index_spec.dtype)
+            new_prevs = np.empty(0, dtype=source_tbl.schema.index_spec.dtype)
+
+        scratch_pad.translate_in_place(source_oracle, target_oracle)
+        return scratch_pad, final_fk_values, new_nexts, new_prevs
+
+    def _compute_topology_patches(
+        self, dirty_table: str, oracles: dict[str, RemapOracle]
+    ) -> list[TopologyScratchpad]:
+        table_obj = self.db.get_table(dirty_table)
+        patches = []
+
+        fk_col_ids = table_obj.foreign_key_columns
+
+        for fk_id in fk_col_ids:
+            col_schema = table_obj.schema.cols[fk_id]
+            source_tbl = table_obj
+
+            if isinstance(col_schema, ForeignKeySchema):
+                fk = col_schema
+                target_tbl = self.db.get_table(fk.target_table)
+
+                missing_idx_src = source_tbl.schema.index_spec.missing
+                missing_idx_tgt = target_tbl.schema.index_spec.missing
+
+                source_oracle = self._create_fk_column_oracle(fk, oracles)
+                target_oracle = (
+                    oracles[target_tbl.name]
+                    if target_tbl.name in oracles
+                    else self._get_identity_oracle(target_tbl.name)
                 )
 
-            scratch_pad.translate_in_place(source_oracle, target_oracle)
-            patches.append(scratch_pad)
+                update_map = self.fk_updates.get(dirty_table, {}).get(fk.name, {})
+
+                global_unlinks = np.union1d(
+                    source_oracle.deletions_sorted,
+                    source_oracle.set_null_unlinks_sorted,
+                ).astype(source_tbl.schema.index_spec.dtype)
+
+                if update_map:
+                    updates_sorted = np.sort(
+                        np.fromiter(
+                            update_map.keys(),
+                            dtype=source_tbl.schema.index_spec.dtype,
+                        )
+                    )
+                    global_unlinks = np.union1d(global_unlinks, updates_sorted)
+
+                if len(source_oracle.moves_from) > 0 and len(global_unlinks) > 0:
+                    keep_mask = ~np.isin(source_oracle.moves_from, global_unlinks)
+                    active_moves_from = source_oracle.moves_from[keep_mask]
+                    active_moves_to = source_oracle.moves_to[keep_mask]
+                else:
+                    active_moves_from = source_oracle.moves_from
+                    active_moves_to = source_oracle.moves_to
+
+                additions = (
+                    self.additions[dirty_table][fk_id][0]
+                    if dirty_table in self.additions
+                    else np.empty(0, dtype=fk.target_table.index_spec.dtype)
+                )
+
+                fk_arr = source_tbl[fk].view
+                adj_next = source_tbl[fk.adj_next].view
+                adj_prev = source_tbl[fk.adj_prev].view
+                adj_head = target_tbl[fk.adj_head].view
+                fk_nulls = source_oracle.set_null_unlinks_sorted
+
+                patch, new_fks, new_nexts, new_prevs = (
+                    self._process_topology_patches_for_subgraph(
+                        dirty_table=dirty_table,
+                        source_tbl=source_tbl,
+                        target_tbl=target_tbl,
+                        fk=fk,
+                        source_oracle=source_oracle,
+                        target_oracle=target_oracle,
+                        unlinks_to_process=global_unlinks,
+                        global_unlinks=global_unlinks,
+                        relink_map=update_map,
+                        additions=additions,
+                        additions_staged_indices=None,
+                        active_moves_from=active_moves_from,
+                        active_moves_to=active_moves_to,
+                        fk_nulls=fk_nulls,
+                        fk_arr=fk_arr,
+                        adj_next=adj_next,
+                        adj_prev=adj_prev,
+                        target_adj_head=adj_head,
+                        target_adj_head_schema=fk.adj_head,
+                        target_adj_count_schema=fk.adj_count
+                        if fk.adjacency_conf.track_counts
+                        else None,
+                        missing_idx_src=missing_idx_src,
+                        missing_idx_tgt=missing_idx_tgt,
+                    )
+                )
+                if len(new_fks) > 0:
+                    self._patch_addition_buffers(
+                        dirty_table, fk, new_fks, new_nexts, new_prevs
+                    )
+                patches.append(patch)
+
+            elif isinstance(col_schema, PolymorphicForeignKeySchema):
+                pm_fk = col_schema
+                source_oracle = self._create_fk_column_oracle(pm_fk, oracles)
+
+                # Fetch updates maps
+                target_updates = self.pm_fk_target_updates.get(dirty_table, {}).get(
+                    pm_fk.name, {}
+                )
+                type_updates = self.pm_fk_type_id_updates.get(dirty_table, {}).get(
+                    pm_fk.name, {}
+                )
+
+                # Physical old types
+                old_types = source_tbl[pm_fk.type_id_col].view
+
+                # Reconstruct new types for updated rows
+                new_types = old_types.copy()
+                for idx, val in type_updates.items():
+                    new_types[idx] = val
+
+                global_unlinks = np.union1d(
+                    source_oracle.deletions_sorted,
+                    source_oracle.set_null_unlinks_sorted,
+                ).astype(source_tbl.schema.index_spec.dtype)
+
+                if target_updates:
+                    updates_sorted = np.sort(
+                        np.fromiter(
+                            target_updates.keys(),
+                            dtype=source_tbl.schema.index_spec.dtype,
+                        )
+                    )
+                    global_unlinks = np.union1d(global_unlinks, updates_sorted)
+
+                if len(source_oracle.moves_from) > 0 and len(global_unlinks) > 0:
+                    keep_mask = ~np.isin(source_oracle.moves_from, global_unlinks)
+                    global_moves_from = source_oracle.moves_from[keep_mask]
+                    global_moves_to = source_oracle.moves_to[keep_mask]
+                else:
+                    global_moves_from = source_oracle.moves_from
+                    global_moves_to = source_oracle.moves_to
+
+                global_additions = (
+                    self.additions[dirty_table][fk_id][0]
+                    if dirty_table in self.additions
+                    else np.empty(
+                        0, dtype=pm_fk.keys_idx_spec.dtype
+                    )  # PM-FK target dtype
+                )
+                type_id_col_id = table_obj.column_ids[pm_fk.type_id_col]
+                global_addition_types = (
+                    self.additions[dirty_table][type_id_col_id][0]
+                    if dirty_table in self.additions
+                    else np.empty(0, dtype=pm_fk.type_id_dtype)
+                )
+
+                fk_arr = source_tbl[pm_fk].view
+                adj_next = source_tbl[pm_fk.adj_next].view
+                adj_prev = source_tbl[pm_fk.adj_prev].view
+
+                missing_idx_src = source_tbl.schema.index_spec.missing
+
+                for target_type_id, tgt_schema in enumerate(pm_fk.target_tables):
+                    target_tbl = self.db.get_table(tgt_schema.name)
+                    missing_idx_tgt = (
+                        pm_fk.keys_idx_spec.missing
+                    )  # PM-FK uses shared index spec!
+
+                    target_oracle = (
+                        oracles[target_tbl.name]
+                        if target_tbl.name in oracles
+                        else self._get_identity_oracle(target_tbl.name)
+                    )
+
+                    # Filter Unlinks using OLD type
+                    src_idx_dtype = source_tbl.schema.index_spec.dtype
+                    deletions_sorted = source_oracle.deletions_sorted.astype(
+                        src_idx_dtype
+                    )
+                    mask_del = old_types[deletions_sorted] == target_type_id
+                    target_deletions = deletions_sorted[mask_del]
+
+                    unlinks_sorted = source_oracle.set_null_unlinks_sorted.astype(
+                        src_idx_dtype
+                    )
+                    mask_unl = old_types[unlinks_sorted] == target_type_id
+                    target_unlinks = unlinks_sorted[mask_unl]
+
+                    unlinks_to_process = np.union1d(
+                        target_deletions, target_unlinks
+                    ).astype(src_idx_dtype)
+
+                    # Add updates where old_type == target_type_id to unlinks_to_process
+                    if target_updates:
+                        mask_upd = old_types[updates_sorted] == target_type_id
+                        target_updates_unlinks = updates_sorted[mask_upd]
+                        unlinks_to_process = np.union1d(
+                            unlinks_to_process, target_updates_unlinks
+                        )
+
+                    # Filter Relinks using NEW type
+                    relink_map = {}
+                    for idx, target_val in target_updates.items():
+                        if new_types[idx] == target_type_id:
+                            relink_map[idx] = target_val
+
+                    # Filter Additions using NEW type
+                    if len(global_additions) > 0:
+                        mask_add = global_addition_types == target_type_id
+                        additions = global_additions[mask_add]
+                    else:
+                        mask_add = np.empty(0, dtype=bool)
+                        additions = global_additions
+
+                    # Filter Moves using OLD type (since moves don't change type)
+                    if len(global_moves_from) > 0:
+                        mask_mov = old_types[global_moves_from] == target_type_id
+                        active_moves_from = global_moves_from[mask_mov]
+                        active_moves_to = global_moves_to[mask_mov]
+                    else:
+                        active_moves_from = global_moves_from
+                        active_moves_to = global_moves_to
+
+                    target_adj_head = target_tbl[
+                        pm_fk.adj_head_columns[target_type_id]
+                    ].view
+
+                    patch, new_fks, new_nexts, new_prevs = (
+                        self._process_topology_patches_for_subgraph(
+                            dirty_table=dirty_table,
+                            source_tbl=source_tbl,
+                            target_tbl=target_tbl,
+                            fk=pm_fk,
+                            source_oracle=source_oracle,
+                            target_oracle=target_oracle,
+                            unlinks_to_process=unlinks_to_process,
+                            global_unlinks=global_unlinks,
+                            relink_map=relink_map,
+                            additions=additions,
+                            additions_staged_indices=(
+                                source_oracle.staged_indices_start
+                                + np.where(mask_add)[0]
+                            ).astype(source_tbl.schema.index_spec.dtype),
+                            active_moves_from=active_moves_from,
+                            active_moves_to=active_moves_to,
+                            fk_nulls=target_unlinks,
+                            fk_arr=fk_arr,
+                            adj_next=adj_next,
+                            adj_prev=adj_prev,
+                            target_adj_head=target_adj_head,
+                            target_adj_head_schema=pm_fk.adj_head_columns[
+                                target_type_id
+                            ],
+                            target_adj_count_schema=pm_fk.adj_count_columns[
+                                target_type_id
+                            ]
+                            if pm_fk.adjacency_conf.track_counts
+                            else None,
+                            missing_idx_src=missing_idx_src,
+                            missing_idx_tgt=missing_idx_tgt,
+                        )
+                    )
+
+                    if len(global_additions) > 0 and len(new_fks) > 0:
+                        self._patch_pm_addition_buffers(
+                            dirty_table, pm_fk, new_fks, new_nexts, new_prevs, mask_add
+                        )
+
+                    patches.append(patch)
 
         return patches
 
@@ -1005,6 +1335,25 @@ class TransactionContext:
         cols[idx_next][0] = new_nexts
         cols[idx_prev][0] = new_prevs
         self.additions[table_name] = tuple(cols)
+
+    def _patch_pm_addition_buffers(
+        self,
+        table_name: str,
+        fk: PolymorphicForeignKeySchema,
+        new_fks: np.ndarray,
+        new_nexts: np.ndarray,
+        new_prevs: np.ndarray,
+        mask: np.ndarray,
+    ):
+        cols = list(self.additions[table_name])
+        idx_fk = self.db.get_table(table_name).column_ids[fk]
+        idx_next = self.db.get_table(table_name).column_ids[fk.adj_next]
+        idx_prev = self.db.get_table(table_name).column_ids[fk.adj_prev]
+
+        # Modify the arrays in place via mask
+        cols[idx_fk][0][mask] = new_fks
+        cols[idx_next][0][mask] = new_nexts
+        cols[idx_prev][0][mask] = new_prevs
 
     def commit(self):
         self._prepare_additions()
@@ -1065,6 +1414,31 @@ class TransactionContext:
                         )
                         if target_oracle:
                             vals = oracle_resolve_array(vals, target_oracle)
+                    elif isinstance(col, PolymorphicForeignKeySchema):
+                        vals = np.fromiter(
+                            pending_updates.values(),
+                            dtype=col.keys_idx_spec.dtype,
+                        )
+
+                        type_id_pending = self.updates.get(tbl_name, {}).get(
+                            col.type_id_col.name, {}
+                        )
+
+                        # Apply target oracle resolution row by row
+                        for idx_in_update, row_idx in enumerate(pending_updates.keys()):
+                            type_id = type_id_pending.get(
+                                row_idx, src_tbl[col.type_id_col].view[row_idx]
+                            )
+                            target_tbl_name = col.target_tables[type_id].name
+                            target_oracle = oracles.get(target_tbl_name)
+                            if target_oracle:
+                                vals[idx_in_update] = oracle_resolve_array(
+                                    np.array(
+                                        [vals[idx_in_update]],
+                                        dtype=col.keys_idx_spec.dtype,
+                                    ),
+                                    target_oracle,
+                                )[0]
                     else:
                         vals = np.fromiter(
                             pending_updates.values(),
@@ -1083,13 +1457,11 @@ class TransactionContext:
         # Apply patches
         for tbl_name, patches in tbl_patches.items():
             src_tbl = self.db.get_table(tbl_name)
-            fk_cols = [
-                c for c in src_tbl.schema.cols if isinstance(c, ForeignKeySchema)
-            ]
 
-            for patch, fk in zip(patches, fk_cols, strict=True):
-                tgt_tbl = self.db.get_table(fk.target_table)
-                patch.apply(src_tbl, tgt_tbl, fk)
+            for patch in patches:
+                assert patch.target_table_schema is not None
+                tgt_tbl = self.db.get_table(patch.target_table_schema)
+                patch.apply(src_tbl, tgt_tbl)
 
         # Fix FKs that got severed by relocations
         for tgt_tbl_name in dirty_tables:
@@ -1104,10 +1476,16 @@ class TransactionContext:
 
                     src_oracle = oracles[src_tbl_name]
 
+                    if isinstance(sub, PolymorphicForeignKeySchema):
+                        type_id = sub.type_id_mapping[tgt_tbl.schema]
+                        adj_head_name = sub.adj_head_columns[type_id]
+                    else:
+                        adj_head_name = sub.adj_head
+
                     fix_keys_broken_by_moved_targets(
                         src_missing=src_oracle.missing_index_sentinel,
                         moves_to=tgt_oracle.moves_to,
-                        head=tgt_tbl[sub.adj_head].view,
+                        head=tgt_tbl[adj_head_name].view,
                         src_fk=src_col_arr,
                         adj_next=src_tbl[sub.adj_next].view,
                         adj_prev=src_tbl[sub.adj_prev].view,

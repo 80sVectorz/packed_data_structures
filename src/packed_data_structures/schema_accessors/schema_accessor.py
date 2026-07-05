@@ -19,6 +19,11 @@ class SchemaAccessor[
     Returned when indexing a table with a DataColSchema. Provides
     direct interaction with the underlying numpy arrays.
 
+    Type Parameters:
+        T_s: The `ColSchemaLike` type that this `SchemaAccessor` wraps.
+        T: The dtype the main column holds (when applicable).
+        *T_shape: Shape info for the shape of the main columns array elements (when applicable).
+
     Attributes:
         table: The table containing the data.
         schema: The schema definition for this column.

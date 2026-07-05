@@ -27,9 +27,9 @@ class ForeignKeySchemaAccessor[
 
     Attributes:
         table: The table containing the foreign key.
-        schema: The foreign key schema definition.
+        schema: The foreign key column schema definition.
         col_id: The internal array index for this column.
-        target_table: The table this foreign key points to.
+        target_table: The table the foreign keys point to.
     """
 
     table: PackedArrayTable

@@ -6,6 +6,7 @@ from .object_col import ObjectColSchema
 from .string_col import StringColSchema
 from .ascii_string_col import AsciiStringColSchema
 from .foreign_key_col import ForeignKeySchema, AdjacencyListConf, FksOnDeleteStyle
+from .pm_foreign_key_col import PolymorphicForeignKeySchema
 
 __all__ = [
     "IndexSpec",
@@ -17,6 +18,7 @@ __all__ = [
     "StringColSchema",
     "AsciiStringColSchema",
     "ForeignKeySchema",
+    "PolymorphicForeignKeySchema",
     "AdjacencyListConf",
     "FksOnDeleteStyle",
 ]
