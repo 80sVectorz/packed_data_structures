@@ -35,6 +35,9 @@ from packed_data_structures.trackers import (
     ArrayTracker,
 )
 
+if TYPE_CHECKING:
+    from packed_data_structures.database import PackedArrayDB
+
 
 @dataclass(slots=True)
 class DeletionTraceback:
@@ -62,10 +65,6 @@ class DeletionTraceback:
                 )
 
         return "->".join(str_steps)
-
-
-if TYPE_CHECKING:
-    from packed_data_structures.database import PackedArrayDB
 
 
 @dataclass(slots=True)
