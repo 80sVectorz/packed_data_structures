@@ -1,4 +1,7 @@
 from __future__ import annotations
+from packed_data_structures.schemas.pm_foreign_key_col import (
+    PolymorphicForeignKeySchema,
+)
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
@@ -26,7 +29,7 @@ class SupportsGetTableSchema[T_idx: np.integer[Any]](ABC):
         ...
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, eq=False)
 class TableSchema[T_idx: np.integer[Any]](SupportsGetTableSchema[T_idx]):
     """Schema definition for a flat, column-oriented table.
 
@@ -45,9 +48,10 @@ class TableSchema[T_idx: np.integer[Any]](SupportsGetTableSchema[T_idx]):
     cols: list[ColSchemaLike[Any]]
     pre_allocate: int = 0
 
-    subscribers: list[ForeignKeySchema[Any, T_idx, Any]] = field(
-        init=False, default_factory=list
-    )
+    subscribers: list[
+        ForeignKeySchema[np.integer[Any], T_idx, np.integer[Any]]
+        | PolymorphicForeignKeySchema[np.integer[Any], np.integer[Any]]
+    ] = field(init=False, default_factory=list)
     col_ids: dict[ColSchemaLike, int] = field(init=False, default_factory=dict)
     _finalized: bool = field(init=False, default=False)
 
@@ -58,7 +62,7 @@ class TableSchema[T_idx: np.integer[Any]](SupportsGetTableSchema[T_idx]):
         for i, col in enumerate(self.cols):
             self.col_ids[col] = i
 
-    def subscribe(self, new_subscriber: ForeignKeySchema):
+    def subscribe(self, new_subscriber: ForeignKeySchema | PolymorphicForeignKeySchema):
         """Register a foreign key that targets this table.
 
         Args:

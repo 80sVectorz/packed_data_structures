@@ -8,6 +8,7 @@ from packed_data_structures.edit_helpers import (
     patch_relocated_adjacency_and_heads,
     fix_keys_broken_by_moved_targets,
     interleave_new_rows,
+    interleave_new_rows_non_contiguous,
     interleave_existing_rows,
 )
 from .testing_utils import get_func_variants
@@ -320,6 +321,57 @@ def test_interleave_new_rows(name, interleave_new_fn):
     assert out_head_idx[0] == 5 and out_head_val[0] == 10
     assert pc == 1
     assert out_prev_idx[0] == 2 and out_prev_val[0] == 11
+
+
+@pytest.mark.parametrize(
+    "name, interleave_new_non_contig_fn", get_func_variants(interleave_new_rows_non_contiguous)
+)
+def test_interleave_new_rows_non_contiguous(name, interleave_new_non_contig_fn):
+    n_new = 3
+    staged_indices = np.array([10, 11, 12], dtype=np.int32)
+    missing_src = 999
+    missing_tgt = 999
+
+    targets = np.array([5, 5, missing_tgt], dtype=np.int32)
+    current_heads = np.full(10, missing_src, dtype=np.int32)
+    current_heads[5] = 2
+
+    adj_next = np.array([0, 1, missing_src], dtype=np.int32)
+    unlinked = np.array([], dtype=np.int32)
+
+    out_prev_idx = np.zeros(10, dtype=np.int32)
+    out_prev_val = np.zeros(10, dtype=np.int32)
+    out_head_idx = np.zeros(10, dtype=np.int32)
+    out_head_val = np.zeros(10, dtype=np.int32)
+
+    new_nexts, new_prevs, pc, hc = interleave_new_non_contig_fn(
+        n_new,
+        staged_indices,
+        missing_src,
+        missing_tgt,
+        targets,
+        current_heads,
+        adj_next,
+        unlinked,
+        out_prev_idx,
+        out_prev_val,
+        0,
+        out_head_idx,
+        out_head_val,
+        0,
+    )
+
+    assert hc == 1
+    assert out_head_idx[0] == 5 and out_head_val[0] == 10
+    assert pc == 1
+    assert out_prev_idx[0] == 2 and out_prev_val[0] == 11
+
+    assert new_nexts[0] == 11
+    assert new_prevs[0] == missing_src
+    assert new_nexts[1] == 2
+    assert new_prevs[1] == 10
+    assert new_nexts[2] == missing_src
+    assert new_prevs[2] == missing_src
 
 
 @pytest.mark.parametrize(

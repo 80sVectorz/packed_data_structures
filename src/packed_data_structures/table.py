@@ -1,4 +1,8 @@
 from __future__ import annotations
+from packed_data_structures.schemas.injected_logic_col import InjectedLogicColSchema
+from packed_data_structures.schema_accessors.pm_foreign_key_accessor import (
+    PolymorphicForeignKeySchemaAccessor,
+)
 from packed_data_structures.schemas.object_col import ObjectColSchema
 from packed_data_structures.schemas.string_col import StringColSchema
 from packed_data_structures.schemas.ascii_string_col import AsciiStringColSchema
@@ -35,12 +39,14 @@ from packed_data_structures.schemas import (
     ForeignKeySchema,
     SupportsGetTableSchema,
     TableSchema,
+    PolymorphicForeignKeySchema,
 )
 
 from .schema_accessors import SchemaAccessor, ForeignKeySchemaAccessor
 
 type RecordsColMajor = (
-    dict[ColSchemaLike, Sequence[Any]] | Sequence[tuple[ColSchemaLike, Sequence[Any]]]
+    dict[ColSchemaLike | str, Sequence[Any]]
+    | Sequence[tuple[ColSchemaLike, Sequence[Any]]]
 )
 type NormalizedRecordsColMajor = tuple[np.ndarray, ...]
 
@@ -66,8 +72,8 @@ class PackedArrayTable[T_idx: np.integer[Any]](
     """A tabular data structure backed by columnar PackedArrays.
 
     This is the primary user-facing class for interacting with the database.
-    It provides a schema-driven API, where users interact with rows and columns
-    using the singleton schema objects (e.g., `DataColSchema`) instead of string keys.
+    It provides a schema-driven API, where interacting with rows and columns
+    is done using the singleton schema objects (e.g., `DataColSchema`) instead of string keys.
 
     Attributes:
         db: The parent database instance containing this table.
@@ -107,7 +113,7 @@ class PackedArrayTable[T_idx: np.integer[Any]](
         self.foreign_key_columns = tuple(
             i
             for i, col in enumerate(self.schema.cols)
-            if isinstance(col, ForeignKeySchema)
+            if isinstance(col, ForeignKeySchema | PolymorphicForeignKeySchema)
         )
         self._default_record = tuple(
             np.dtype(a.dtype).type(a.empty_fill) for a in self.arrays
@@ -120,6 +126,11 @@ class PackedArrayTable[T_idx: np.integer[Any]](
     def __getitem__(
         self, key: str
     ) -> SchemaAccessor[ColSchemaLike[np.generic], np.generic]: ...
+
+    @overload
+    def __getitem__[T_counts: np.integer[Any]](
+        self, key: PolymorphicForeignKeySchema[T_idx, T_counts]
+    ) -> PolymorphicForeignKeySchemaAccessor[T_idx, T_counts]: ...
 
     @overload
     def __getitem__[T: np.integer[Any], T_counts: np.integer[Any]](
@@ -180,6 +191,8 @@ class PackedArrayTable[T_idx: np.integer[Any]](
             )
 
         match key:
+            case PolymorphicForeignKeySchema():
+                return PolymorphicForeignKeySchemaAccessor(self, key, col_id)
             case ForeignKeySchema():
                 return ForeignKeySchemaAccessor(self, key, col_id)
             case ObjectColSchema():
@@ -216,13 +229,20 @@ class PackedArrayTable[T_idx: np.integer[Any]](
                     raise KeyError(
                         f"Table '{self.schema.name}' does not contain the included column '{k.name if isinstance(k, ColSchemaLike) else k}'"
                     )
+
+                col = self.schema.cols[col_id]
+                if isinstance(col, InjectedLogicColSchema) and not col.allows_updates:
+                    raise PermissionError(
+                        f"Cannot manually edit injected logic column '{col.name}'"
+                    )
+
                 r_norm[col_id] = v
 
             yield tuple(r_norm)
 
     @overload
     def normalize_records_col_major(
-        self, records: dict[ColSchemaLike, Sequence[Any]]
+        self, records: dict[ColSchemaLike | str, Sequence[Any]]
     ) -> NormalizedRecordsColMajor: ...
 
     @overload
@@ -232,7 +252,7 @@ class PackedArrayTable[T_idx: np.integer[Any]](
 
     def normalize_records_col_major(
         self,
-        records: dict[ColSchemaLike, Sequence[Any]]
+        records: dict[ColSchemaLike | str, Sequence[Any]]
         | Sequence[tuple[ColSchemaLike, Sequence[Any]]],
     ) -> NormalizedRecordsColMajor:
         last_key: ColSchemaLike | None = None
@@ -241,7 +261,7 @@ class PackedArrayTable[T_idx: np.integer[Any]](
         )  # Fixes TY not seeing the walrus updates
         if isinstance(records, dict):
             try:
-                records = cast(dict[ColSchemaLike, Sequence[Any]], records)
+                records = cast(dict[ColSchemaLike | str, Sequence[Any]], records)
                 records_intermediate = tuple(
                     (self.column_ids[last_key := k], v) for k, v in records.items()
                 )
@@ -273,6 +293,14 @@ class PackedArrayTable[T_idx: np.integer[Any]](
             )
 
         included_keys = set(k for k, _ in records_intermediate)
+
+        for key in included_keys:
+            col = self.schema.cols[key]
+            if isinstance(col, InjectedLogicColSchema) and not col.allows_updates:
+                raise PermissionError(
+                    f"Cannot manually edit injected logic column '{col.name}'"
+                )
+
         normalized_records: list[None | np.ndarray] = [None] * len(self.arrays)
 
         for col_id, values in records_intermediate:
@@ -306,8 +334,15 @@ class PackedArrayTable[T_idx: np.integer[Any]](
         for key, data in iterator:
             assert isinstance(key, str | ColSchemaLike)
             col_id = self.column_ids.get(key)
+
             if col_id is None:
                 raise KeyError(f"Column '{key}' not found in table '{self.name}'")
+
+            col = self.schema.cols[col_id]
+            if isinstance(col, InjectedLogicColSchema) and not col.allows_updates:
+                raise PermissionError(
+                    f"Cannot manually edit injected logic column '{col.name}'"
+                )
 
             dtype = self.arrays[col_id].dtype
 
@@ -398,15 +433,16 @@ class PackedArrayTable[T_idx: np.integer[Any]](
         return self.add_entries((entry_record,), "row_major")[0]
 
     def del_entries(
-        self, indices: Iterable[int] | np.ndarray[Any, np.dtype[np.bool_]]
+        self,
+        indices: Iterable[int] | np.ndarray[Any, np.dtype[np.bool_ | T_idx]],
     ) -> None:
         """Delete rows.
 
         If any foreign keys are severed as a result of the deletion.
-        Those rows are also deleted.
+        The delete behaviour that said FK column defines gets triggered.
 
         Args:
-            indices: The indices of the rows to delete
+            indices: The indices of the rows to delete.
 
         Raises:
             IndexError: If any index doesn't satisfy:
