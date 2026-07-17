@@ -165,7 +165,7 @@ class DirtyTrackingArray[T_s: tuple[int, ...], T_dt: np.generic](
         return result
 
 
-def tracked_njit(mutates: Callable[..., Sequence[Any]], **njit_kwargs):
+def tracked_njit(mutates: Callable[..., Sequence[Any]], **njit_kwargs: Any):
     """Wraps a Numba function to automatically update timestamps of modified arrays.
 
     Args:
