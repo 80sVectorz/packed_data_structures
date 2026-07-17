@@ -1,6 +1,7 @@
 from .schemas import (
     TableSchema,
     DataColSchema,
+    ObjectColSchema,
     ForeignKeySchema,
     IndexSpec,
     AdjacencyListConf,
@@ -8,8 +9,8 @@ from .schemas import (
 from .database import PackedArrayDB
 from .table import PackedArrayTable
 from .transaction_context import TransactionContext
-from .packed_array import PackedArray
-from .dirty_tracking import (
+from .arrays.packed_array import PackedArray, PackedArrayBuffer
+from .arrays.dirty_tracking import (
     DirtyTimestampProvider,
     ProvidesDirtyTimestamp,
     DirtyTrackingArray,
@@ -18,6 +19,7 @@ from .dirty_tracking import (
 __all__ = [
     "TableSchema",
     "DataColSchema",
+    "ObjectColSchema",
     "ForeignKeySchema",
     "IndexSpec",
     "AdjacencyListConf",
@@ -25,6 +27,7 @@ __all__ = [
     "PackedArrayTable",
     "TransactionContext",
     "PackedArray",
+    "PackedArrayBuffer",
     "DirtyTimestampProvider",
     "ProvidesDirtyTimestamp",
     "DirtyTrackingArray",

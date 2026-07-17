@@ -184,7 +184,7 @@ def tracked_njit(mutates: Callable[..., Sequence[Any]], **njit_kwargs):
             # 1. Run the prediction to find arrays that WILL be dirtied
             dirty_candidates = mutates(*args, **kwargs)
 
-            # 2. Mark them as dirty (updates the shared TimestampRef)
+            # 2. Mark them as dirty
             for arr in dirty_candidates:
                 if isinstance(arr, DirtyTrackingArray):
                     arr.timestamp_ref.update()

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Any
 
 from collections.abc import Sequence
 import numpy as np
@@ -8,9 +9,10 @@ from packed_data_structures.nb_hash_set import (
     build_int_set_same_dtype,
     int_set_contains_same_dtype,
 )
+from packed_data_structures.arrays.dirty_tracking import tracked_njit
 
 
-type T_IndexArray = np.ndarray[tuple[int], np.dtype[np.integer]]
+type T_IndexArray = np.ndarray[tuple[int], np.dtype[np.integer[Any]]]
 
 
 def plan_bulk_edit(
@@ -290,7 +292,13 @@ def patch_relocated_adjacency_and_heads(
     return n_cursor, p_cursor, h_cursor
 
 
-@nb.njit(cache=True)
+@tracked_njit(
+    cache=True,
+    mutates=lambda src_missing, moves_to, head, src_fk, adj_next, adj_prev: (
+        src_fk,
+        adj_prev,
+    ),
+)
 def fix_keys_broken_by_moved_targets(
     src_missing: int,
     moves_to: np.ndarray,  # (M,) new tgt ids in B
@@ -386,6 +394,7 @@ def interleave_new_rows(
     new_nexts = np.empty(n_new, dtype=out_prev_val.dtype)
     new_prevs = np.full(n_new, missing_val_src, dtype=out_prev_val.dtype)
 
+    # Use mergesort to ensure determinism
     order = np.argsort(targets, kind="mergesort")
 
     i = 0
@@ -442,6 +451,113 @@ def interleave_new_rows(
 
 
 @nb.njit(cache=True)
+def interleave_new_rows_non_contiguous(
+    n_new: int,
+    staged_indices: np.ndarray,
+    missing_val_src: int,
+    missing_val_tgt: int,
+    targets: np.ndarray,
+    current_heads: np.ndarray,
+    adj_next: np.ndarray,
+    unlinked_indices: np.ndarray,
+    # Scratchpad write targets
+    out_prev_idx: np.ndarray,
+    out_prev_val: np.ndarray,
+    p_cursor: int,
+    out_head_idx: np.ndarray,
+    out_head_val: np.ndarray,
+    h_cursor: int,
+) -> tuple[
+    np.ndarray,  # new_nexts (len n_new)
+    np.ndarray,  # new_prevs (len n_new)
+    int,  # p_cursor
+    int,  # h_cursor
+]:
+    """Interleaves new non-contiguous rows into per-target adjacency lists (physical-index mode).
+
+    Similar to interleave_new_rows, but takes an array of specific staged indices instead
+    of a contiguous staged_start block. This is useful for Polymorphic FK additions which
+    are disjointly distributed across a mixed-type addition block.
+
+    Args:
+        n_new: Number of new additions.
+        staged_indices: Array of staged indices for the new additions.
+        missing_val_src: Sentinel missing value of source/parent column (dtype max).
+        missing_val_tgt: Sentinel missing value of target/child column (dtype max).
+        targets: Target indices (FK targets) for each new row.
+        current_heads: Current head pointers indexed by source id.
+        adj_next: The adjacency next pointers.
+        unlinked_indices: Sorted array of indices that have been unlinked.
+        out_prev_idx: Scratchpad indices for prev-pointer patches (applied to source adj_prev).
+        out_prev_val: Scratchpad values for prev-pointer patches.
+        p_cursor: Initial cursor for prev patches.
+        out_head_idx: Scratchpad indices for head-pointer patches (applied to target adj_head).
+        out_head_val: Scratchpad values for head-pointer patches.
+        h_cursor: Initial cursor for head patches.
+
+    Returns:
+        (new_nexts, new_prevs, p_cursor, h_cursor)
+    """
+    new_nexts = np.empty(n_new, dtype=out_prev_val.dtype)
+    new_prevs = np.full(n_new, missing_val_src, dtype=out_prev_val.dtype)
+
+    # Use mergesort to ensure determinism
+    order = np.argsort(targets, kind="mergesort")
+
+    i = 0
+    while i < n_new:
+        t = targets[order[i]]
+        start = i
+        i += 1
+        while i < n_new and targets[order[i]] == t:
+            i += 1
+        end = i
+
+        # Null-target additions: isolate.
+        if t == missing_val_tgt:
+            for k in range(start, end):
+                idx = order[k]
+                new_nexts[idx] = missing_val_src
+                new_prevs[idx] = missing_val_src
+            continue
+
+        if t < len(current_heads):
+            raw_head = current_heads[t]
+        else:
+            raw_head = missing_val_src
+
+        old_head = find_surviving_neighbor(
+            int(raw_head), adj_next, unlinked_indices, missing_val_src
+        )
+
+        first_idx = order[start]
+        last_idx = order[end - 1]
+
+        # head[target] = first_new
+        out_head_idx[h_cursor] = t
+        out_head_val[h_cursor] = staged_indices[first_idx]
+        h_cursor += 1
+
+        # Link the new chain internally.
+        for k in range(start, end - 1):
+            a = order[k]
+            b = order[k + 1]
+            new_nexts[a] = staged_indices[b]
+            new_prevs[b] = staged_indices[a]
+
+        # Tail points to old head.
+        new_nexts[last_idx] = old_head
+
+        # old_head.prev = last_new
+        if old_head != missing_val_src:
+            out_prev_idx[p_cursor] = old_head
+            out_prev_val[p_cursor] = staged_indices[last_idx]
+            p_cursor += 1
+
+    return new_nexts, new_prevs, p_cursor, h_cursor
+
+
+@nb.njit(cache=True)
 def interleave_existing_rows(
     row_indices: np.ndarray,
     targets: np.ndarray,
@@ -465,7 +581,7 @@ def interleave_existing_rows(
 
     Used when a Foreign Key is updated.
     """
-    # Sort by target to group additions
+    # Sort by target to group additions. Use mergesort to ensure determinism.
     order = np.argsort(targets, kind="mergesort")
     n_updates = len(row_indices)
 

@@ -88,6 +88,35 @@ For the `fk_to_a` schema above, the system silently injects:
 
 These topology pointers are essential for efficiently maintaining relational integrity when editing the database, particularly when resolving foreign keys during swap-and-pop deletions.
 
+## PolymorphicForeignKeySchema
+
+Sometimes, a foreign key needs to point to a row in one of several possible tables. This is handled by the `PolymorphicForeignKeySchema`.
+
+```python
+from packed_data_structures.schemas import PolymorphicForeignKeySchema
+
+table_c_schema = TableSchema(name="table_c", index_spec=IndexSpec.from_dtype(np.uint32))
+
+pm_fk_to_bc = PolymorphicForeignKeySchema(
+    name="link_to_b_or_c",
+    target_tables=[table_b_schema, table_c_schema],
+    on_delete=FksOnDeleteStyle.CASCADE,
+    adjacency_conf=AdjacencyListConf(track_counts=True)
+)
+
+table_a_schema.register(pm_fk_to_bc)
+```
+
+Like the standard foreign key, `PolymorphicForeignKeySchema` actively injects adjacency list columns to manage topology:
+
+- `adj_head`: Injected into **each** of the target tables (`table_b` and `table_c`).
+
+- `adj_next` & `adj_prev`: Injected into the source table (`table_a`).
+
+- `adj_count`: Injected into **each** target table (if enabled via `AdjacencyListConf`).
+
+Additionally, it automatically injects a `_type_id` column into the source table to encode which target table each key points to. The system automatically selects the smallest possible unsigned integer data type for this column based on the number of target tables.
+
 ## The Database
 
 It is important to remember that all of the schema classes discussed so far are simply **blueprints**. They define the structure, data types, and relationships of your data, but they do not allocate any arrays or store any data themselves.

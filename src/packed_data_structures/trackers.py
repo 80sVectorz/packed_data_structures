@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Literal, Sequence, Iterator, Any
+from typing import Literal, Any
+from collections.abc import Sequence, Iterator
 
 import numpy as np
 

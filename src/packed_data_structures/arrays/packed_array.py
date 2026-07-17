@@ -168,7 +168,7 @@ class PackedArray[T: np.generic, *T_shape](
         kwargs = {k: unwrap(v) for k, v in (kwargs or {}).items()}
         return func(*args, **kwargs)
 
-    def append(self, element: T | int | float) -> None:
+    def append(self, element: T) -> None:
         capacity = self._data.capacity
         size = self._data.size
         if size >= capacity:
@@ -223,7 +223,10 @@ class PackedArray[T: np.generic, *T_shape](
         if index < 0:
             index += size
 
-        val = self._data.arr[index]
+        # Explicitly copy to ensure compatibility with complex types e.g Structured Arrays.
+        # They can return a mutable view in the form of a np.void object.
+        val = cast(T, np.copy(self._data.arr[index]))
+
         self._data.arr[index] = self.empty_fill
 
         if index != size - 1:
@@ -236,7 +239,12 @@ class PackedArray[T: np.generic, *T_shape](
 
     def _swap(self, idx_a: int, idx_b: int):
         arr = self._data.arr
-        arr[idx_a], arr[idx_b] = arr[idx_b], arr[idx_a]
+
+        # Explicitly copy to ensure compatibility with complex types e.g Structured Arrays.
+        # They can return a mutable view in the form of a np.void object.
+        temp = np.copy(arr[idx_a])
+        arr[idx_a] = arr[idx_b]
+        arr[idx_b] = temp
 
     def swap(self, idx_a: int, idx_b: int):
         size = self._data.size
