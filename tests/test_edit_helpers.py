@@ -324,7 +324,8 @@ def test_interleave_new_rows(name, interleave_new_fn):
 
 
 @pytest.mark.parametrize(
-    "name, interleave_new_non_contig_fn", get_func_variants(interleave_new_rows_non_contiguous)
+    "name, interleave_new_non_contig_fn",
+    get_func_variants(interleave_new_rows_non_contiguous),
 )
 def test_interleave_new_rows_non_contiguous(name, interleave_new_non_contig_fn):
     n_new = 3
