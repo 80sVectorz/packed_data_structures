@@ -1481,9 +1481,6 @@ class TransactionContext:
                 for sub in tgt_tbl.schema.subscribers:
                     src_tbl = self.db.get_table(sub.parent_table)
                     src_col_arr = src_tbl[sub].view
-                    src_tbl_name = sub.parent_table.name
-
-                    src_oracle = oracles[src_tbl_name]
 
                     if isinstance(sub, PolymorphicForeignKeySchema):
                         type_id = sub.type_id_mapping[tgt_tbl.schema]
@@ -1492,7 +1489,7 @@ class TransactionContext:
                         adj_head_name = sub.adj_head
 
                     fix_keys_broken_by_moved_targets(
-                        src_missing=src_oracle.missing_index_sentinel,
+                        src_missing=src_tbl.schema.index_spec.missing,
                         moves_to=tgt_oracle.moves_to,
                         head=tgt_tbl[adj_head_name].view,
                         src_fk=src_col_arr,
