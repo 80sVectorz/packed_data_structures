@@ -36,15 +36,10 @@ This allows you to stage complex edits—like creating a new row and immediately
 ```python
 with db.transaction():
     # Add a single row using a dictionary mapping Column Schemas to values
-    staged_idx = table_a.add_entry({
-        col_weight: 1.5,
-        col_position: [10.0, 0.0, 5.0]
-    })
-    
+    staged_idx = table_a.add_entry({col_weight: 1.5, col_position: [10.0, 0.0, 5.0]})
+
     # We can use the staged index to link new entries together during the same transaction
-    table_b.add_entry({
-        fk_to_a: staged_idx
-    })
+    table_b.add_entry({fk_to_a: staged_idx})
 ```
 
 ### Bulk Operations
@@ -59,9 +54,9 @@ with db.transaction():
     staged_indices_range = table_a.add_entries(
         records={
             col_weight: [2.0, 3.0, 4.0],
-            col_position: [[0, 0, 0], [1, 1, 1], [2, 2, 2]]
+            col_position: [[0, 0, 0], [1, 1, 1], [2, 2, 2]],
         },
-        records_shape="col_major"
+        records_shape="col_major",
     )
 ```
 Bulk operations allow the underlying NumPy arrays to ingest all data simultaneously without the overhead of repeated Python function calls. 
@@ -143,10 +138,7 @@ To safely remap a foreign key, use the `update_entries` method within a transact
 ```python
 with db.transaction():
     # Safely update the foreign key of row 5 to point to a new target
-    table_b.update_entries(
-        updates={fk_to_a: {5: new_target_idx}}, 
-        shape="col_major"
-    )
+    table_b.update_entries(updates={fk_to_a: {5: new_target_idx}}, shape="col_major")
 ```
 The transaction context will take care of unlinking the old adjacency pointers and establishing the new ones.
 

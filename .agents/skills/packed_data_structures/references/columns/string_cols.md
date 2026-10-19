@@ -39,5 +39,5 @@ table[col_sys_key].view[5] = b"sys_id_8"  # ASCII columns accept bytes/ASCII str
 
 # Read string values
 label = table[col_label][5]
-print(label) # Outputs: "concept_node"
+print(label)  # Outputs: "concept_node"
 ```

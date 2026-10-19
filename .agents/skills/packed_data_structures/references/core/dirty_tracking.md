@@ -45,10 +45,8 @@ To resolve this, PDS provides the `tracked_njit` decorator.
 ```python
 from packed_data_structures.arrays.dirty_tracking import tracked_njit
 
-@tracked_njit(
-    mutates=lambda arg1, arg2: (arg1, arg2),
-    cache=True
-)
+
+@tracked_njit(mutates=lambda arg1, arg2: (arg1, arg2), cache=True)
 def jit_kernel(array_a, array_b):
     # Performance-critical compiled mutations
     pass
@@ -81,10 +79,8 @@ import numba as nb
 import numpy as np
 from packed_data_structures.arrays.dirty_tracking import tracked_njit
 
-@tracked_njit(
-    mutates=lambda weights, delta: (weights,),
-    cache=True
-)
+
+@tracked_njit(mutates=lambda weights, delta: (weights,), cache=True)
 def apply_delta_kernel(weights: np.ndarray, delta: float):
     # Numba JIT loops mutates the raw memory buffer directly
     for i in range(len(weights)):

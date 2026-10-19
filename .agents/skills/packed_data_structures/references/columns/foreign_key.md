@@ -63,8 +63,5 @@ To preserve list integrity, **never write to the raw foreign key view array dire
 ```python
 with db.transaction():
     # Safely move row 5 to reference target row 22
-    table_source.update_entries(
-        updates={fk_to_target: {5: 22}},
-        shape="col_major"
-    )
+    table_source.update_entries(updates={fk_to_target: {5: 22}}, shape="col_major")
 ```

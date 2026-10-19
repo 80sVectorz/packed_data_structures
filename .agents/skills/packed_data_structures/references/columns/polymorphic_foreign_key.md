@@ -55,9 +55,9 @@ All polymorphic target updates must happen inside a transaction context.
 with db.transaction():
     table_junction.update_entries(
         updates={
-            pm_fk_member: {5: 12},                # Point to row 12
-            pm_fk_member.type_id_col: {5: 1}      # Target type 1 (edges table)
+            pm_fk_member: {5: 12},  # Point to row 12
+            pm_fk_member.type_id_col: {5: 1},  # Target type 1 (edges table)
         },
-        shape="col_major"
+        shape="col_major",
     )
 ```

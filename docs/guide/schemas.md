@@ -11,10 +11,7 @@ import numpy as np
 from packed_data_structures.schemas import TableSchema, IndexSpec
 
 # Create a schema for our table, specifying that we will address rows using 32-bit unsigned integers
-table_a_schema = TableSchema(
-    name="table_a", 
-    index_spec=IndexSpec.from_dtype(np.uint32)
-)
+table_a_schema = TableSchema(name="table_a", index_spec=IndexSpec.from_dtype(np.uint32))
 ```
 
 By defining an `IndexSpec`, the schema establishes a universal language for how rows in this table are addressed. The maximum representable value of the data type (e.g., `4,294,967,295` for `uint32`) is automatically reserved as the "missing" or "null" sentinel value.
@@ -36,9 +33,9 @@ col_position = DataColSchema(name="position", dtype=np.float32, shape=(3,), defa
 
 # 1. Clean Initialization (Recommended)
 table_a_schema = TableSchema(
-    name="table_a", 
+    name="table_a",
     index_spec=IndexSpec.from_dtype(np.uint32),
-    cols=[col_weight, col_position]
+    cols=[col_weight, col_position],
 )
 
 # 2. Manual Registration
@@ -57,7 +54,11 @@ For example, `DataColSchema[np.float32]` guarantees that the underlying array vi
 Relational constraints are modeled using the `ForeignKeySchema`. A foreign key links a row in a source table to a row in a target table.
 
 ```python
-from packed_data_structures.schemas import ForeignKeySchema, FksOnDeleteStyle, AdjacencyListConf
+from packed_data_structures.schemas import (
+    ForeignKeySchema,
+    FksOnDeleteStyle,
+    AdjacencyListConf,
+)
 
 table_b_schema = TableSchema(name="table_b", index_spec=IndexSpec.from_dtype(np.uint32))
 
@@ -65,7 +66,7 @@ fk_to_a = ForeignKeySchema(
     name="link_to_a",
     target_table=table_a_schema,
     on_delete=FksOnDeleteStyle.CASCADE,
-    adjacency_conf=AdjacencyListConf(track_counts=True)
+    adjacency_conf=AdjacencyListConf(track_counts=True),
 )
 
 table_b_schema.register(fk_to_a)
@@ -101,7 +102,7 @@ pm_fk_to_bc = PolymorphicForeignKeySchema(
     name="link_to_b_or_c",
     target_tables=[table_b_schema, table_c_schema],
     on_delete=FksOnDeleteStyle.CASCADE,
-    adjacency_conf=AdjacencyListConf(track_counts=True)
+    adjacency_conf=AdjacencyListConf(track_counts=True),
 )
 
 table_a_schema.register(pm_fk_to_bc)

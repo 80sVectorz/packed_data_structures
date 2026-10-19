@@ -25,9 +25,7 @@ A `TableSchema` logical blueprint describes the columns and indexing specificati
 from packed_data_structures.schemas import TableSchema
 
 schema_nodes = TableSchema(
-    name="nodes",
-    index_spec=idx_spec,
-    cols=[col_weight, col_position]
+    name="nodes", index_spec=idx_spec, cols=[col_weight, col_position]
 )
 ```
 

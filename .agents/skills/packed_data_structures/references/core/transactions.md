@@ -22,10 +22,7 @@ Row indices in PDS should be treated as ephemeral identifiers rather than perman
 * **Row-Major Insertions:**
   ```python
   # Add a single entry, returning a staged virtual ID
-  staged_id = table.add_entry({
-      col_weight: 1.5,
-      col_position: [0.0, 1.0, 2.0]
-  })
+  staged_id = table.add_entry({col_weight: 1.5, col_position: [0.0, 1.0, 2.0]})
   ```
 * **Column-Major Bulk Insertions (Recommended for performance):**
   ```python
@@ -33,9 +30,9 @@ Row indices in PDS should be treated as ephemeral identifiers rather than perman
   staged_range = table.add_entries(
       records={
           col_weight: [2.0, 3.0, 4.0],
-          col_position: [[0,0,0], [1,1,1], [2,2,2]]
+          col_position: [[0, 0, 0], [1, 1, 1], [2, 2, 2]],
       },
-      records_shape="col_major"
+      records_shape="col_major",
   )
   ```
 
@@ -69,20 +66,13 @@ To preserve internal adjacency chains, **never write to the raw foreign key view
 ```python
 with db.transaction():
     # Remap foreign keys using update dictionary mapping {row_idx: target_idx}
-    table_source.update_entries(
-        updates={fk_to_target: {5: 22}},
-        shape="col_major"
-    )
+    table_source.update_entries(updates={fk_to_target: {5: 22}}, shape="col_major")
 ```
 * **Polymorphic Foreign Keys:** Both the target ID and target type column should be updated.
   ```python
   with db.transaction():
       table_junction.update_entries(
-          updates={
-              pm_fk: {5: 12},
-              pm_fk.type_id_col: {5: 1}
-          },
-          shape="col_major"
+          updates={pm_fk: {5: 12}, pm_fk.type_id_col: {5: 1}}, shape="col_major"
       )
   ```
 
@@ -104,11 +94,8 @@ When inserting rows, records can be structured as dictionaries or sequences:
    - **Example:**
      ```python
      table.add_entries(
-         records=[
-             (col_weight, [1.0, 2.0]),
-             (col_position, [[0,0,0], [1,1,1]])
-         ],
-         records_shape="col_major"
+         records=[(col_weight, [1.0, 2.0]), (col_position, [[0, 0, 0], [1, 1, 1]])],
+         records_shape="col_major",
      )
      ```
 
@@ -127,17 +114,11 @@ Updates are passed in column-major layout. The values for a column can be struct
      # Flat arrays of indices to edit and their corresponding new values
      indices = np.array([5, 12], dtype=np.uint32)
      values = np.array([2.0, 3.5], dtype=np.float32)
-     
-     table.update_entries(
-         updates={col_weight: (indices, values)},
-         shape="col_major"
-     )
+
+     table.update_entries(updates={col_weight: (indices, values)}, shape="col_major")
      ```
      You can also use a sequence of tuples for the top-level structure to avoid dictionary instantiation entirely:
      ```python
-     table.update_entries(
-         updates=[(col_weight, (indices, values))],
-         shape="col_major"
-     )
+     table.update_entries(updates=[(col_weight, (indices, values))], shape="col_major")
      ```
 
